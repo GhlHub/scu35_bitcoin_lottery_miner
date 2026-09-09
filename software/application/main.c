@@ -6,6 +6,7 @@
 #include "xil_cache.h"
 #include "xil_printf.h"
 #include "xil_io.h"
+#include "versions.h"
 miner_settings settings;
 uint8_t active_mac[6];
 SemaphoreHandle_t settings_lock;
@@ -37,7 +38,9 @@ static void network_watch(void *unused){
 }
 int main(void){
     console_init();Xil_ICacheEnable();Xil_DCacheEnable();
-    xil_printf("SCU35 Bitcoin miner / FreeRTOS 202604-LTS / CPU 50MHz\r\n");
+    xil_printf("SCU35 Bitcoin miner v" APPLICATION_VERSION " / FreeRTOS 202604-LTS / CPU 50MHz\r\n");
+    xil_printf("Hardware version %08x / bootloader version %08x / lanes %d\r\n",
+        Xil_In32(MINER_HW_VERSION_REG),Xil_In32(MINER_BOOT_VERSION_REG),Xil_In32(MINER_ENGINES_REG));
     int stored=settings_load(&settings,eeprom_read);
     memcpy(active_mac,settings.mac,6);
     random_state^=Xil_In32(0x41c00008U);

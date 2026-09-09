@@ -30,19 +30,26 @@ def validate_settings(values):
     if not 1 <= port <= 65535:
         raise ValueError("Port must be 1..65535")
     for name, maximum in [("host", 95), ("worker", 127), ("password", 63)]:
-        value = values[name]
+        value = values.get(name, "")
         if len(value) > maximum or any(ord(c) < 32 or ord(c) > 126 or c in '\\"' for c in value):
             raise ValueError(f"{name}: maximum {maximum} printable ASCII characters; no quotes or backslashes")
     if any(not (c.isascii() and (c.isalnum() or c in ".-")) for c in values["host"]):
         raise ValueError("Host must be a hostname or IPv4 address, without a URL prefix")
-    return dict(command="configure", mac=octets.hex(":"), port=port,
-                host=values["host"], worker=values["worker"], password=values["password"])
+    result = dict(command="configure", mac=octets.hex(":"), port=port,
+                  host=values["host"], worker=values["worker"])
+    if "password" in values:
+        result["password"] = values["password"]
+    return result
 
 
 def configure(ip, values, port=CONFIG_PORT):
     """Only call for an address selected from received discovery responses."""
+    return request_config(ip, validate_settings(values), port)
+
+
+def request_config(ip, request, port=CONFIG_PORT):
     ipaddress.IPv4Address(ip)
-    payload = (json.dumps(validate_settings(values), separators=(",", ":")) + "\n").encode("ascii")
+    payload = (json.dumps(request, separators=(",", ":")) + "\n").encode("ascii")
     with socket.create_connection((ip, port), timeout=5) as sock:
         sock.settimeout(5)
         sock.sendall(payload)
@@ -58,6 +65,65 @@ def configure(ip, values, port=CONFIG_PORT):
         if not isinstance(reply, dict) or not isinstance(reply.get("ok"), bool):
             raise ValueError("Invalid miner reply")
         return reply
+
+
+def read_settings(ip, port=CONFIG_PORT):
+    reply = request_config(ip, {"command": "get_settings"}, port)
+    if not reply["ok"]:
+        raise ValueError(reply.get("error", "Settings read failed"))
+    if "password" in reply:
+        raise ValueError("Miner unexpectedly returned a password")
+    if type(reply.get("stored")) is not bool or type(reply.get("password_set")) is not bool:
+        raise ValueError("Invalid settings response")
+    try:
+        validate_settings(reply)
+        validate_settings(dict(reply, mac=reply["active_mac"]))
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise ValueError("Invalid settings response") from exc
+    return reply
+
+
+class SettingsFormState:
+    """Reject responses for a previous selection or edits made during a read."""
+    def __init__(self):
+        self.ip, self.generation, self.revision = None, 0, 0
+
+    def select(self, ip):
+        self.ip, self.generation, self.revision = ip, self.generation + 1, 0
+        return self.token()
+
+    def edited(self):
+        self.revision += 1
+
+    def begin_read(self):
+        self.generation += 1
+        return self.token()
+
+    def token(self):
+        return self.ip, self.generation, self.revision
+
+    def accepts(self, token):
+        return token == self.token()
+
+
+def format_hashrate(item):
+    value = item.get("hashrate_hps")
+    return "unavailable" if value is None else f"{value / 1_000_000:.3f} MH/s"
+
+
+def format_event(item):
+    detail = item.get("details") or {}
+    number = detail.get("job_number") or item.get("job_number", 0)
+    job = detail.get("job_id") or item.get("job_id", "")
+    text = item["event"]
+    if job:
+        text += f" | job #{number} / {job}"
+    submission = detail.get("submission")
+    if submission:
+        text += " | " + json.dumps(submission, separators=(",", ":"))
+    if detail.get("hash"):
+        text += " | hash=" + detail["hash"]
+    return text
 
 
 class Discovery(threading.Thread):
@@ -111,6 +177,23 @@ class Discovery(threading.Thread):
                             raise ValueError("Invalid telemetry number")
                     if not isinstance(item.get("event"), str) or len(item["event"]) > 63:
                         continue
+                    for key in ["job_number", "shares_submitted", "shares_accepted", "shares_rejected",
+                                "hardware_errors", "events_dropped", "hashes_total", "hashrate_sample_ms", "hashrate_hps"]:
+                        if key in item and item[key] is not None and (type(item[key]) is not int or item[key] < 0):
+                            raise ValueError("Invalid mining telemetry number")
+                    if "job_id" in item and (not isinstance(item["job_id"], str) or len(item["job_id"]) > 127):
+                        continue
+                    detail = item.get("details")
+                    if detail is not None:
+                        if not isinstance(detail, dict):
+                            continue
+                        if not isinstance(detail.get("job_id", ""), str) or not isinstance(detail.get("hash", ""), str):
+                            continue
+                        submission = detail.get("submission")
+                        if submission is not None and (not isinstance(submission, dict) or
+                                submission.get("method") != "mining.submit" or
+                                not isinstance(submission.get("params"), list) or len(submission["params"]) != 5):
+                            continue
                     item = dict(item, ip=peer[0], seen=time.monotonic())
                     self.peers[peer[0]] = item["seen"]
                     self.messages.put(("telemetry", item))
@@ -118,12 +201,22 @@ class Discovery(threading.Thread):
                     continue
 
 
+DASHBOARD_VERSION = "1.0.0"
+
+
+def format_versions(item):
+    return (f"Lanes {item.get('engines', 'unknown')} | " + " | ".join(
+        f"{label} {item.get(key) or 'unknown'}" for key, label in
+        [("hw_version", "HW"), ("bootloader_version", "Boot"),
+         ("application_version", "App")]))
+
+
 def gui(args):
     import tkinter as tk
     from tkinter import ttk, messagebox
     root = tk.Tk()
-    root.title("SCU35 Bitcoin lottery miners")
-    root.geometry("1050x650")
+    root.title(f"SCU35 Bitcoin lottery miners — Dashboard v{DASHBOARD_VERSION}")
+    root.geometry("1320x800")
     messages = queue.Queue()
     discovery = Discovery(messages, args.broadcast)
     miners, last_events = {}, {}
@@ -134,11 +227,13 @@ def gui(args):
     ttk.Button(toolbar, text="Discover now", command=discovery.scan.set).pack(side="left")
     status = tk.StringVar(value="Discovering miners…")
     ttk.Label(toolbar, textvariable=status).pack(side="left", padx=12)
-    columns = ("ip", "mac", "temp", "network", "age", "event")
+    columns = ("ip", "mac", "temp", "rate", "job", "shares", "network", "age")
     table = ttk.Treeview(pane, columns=columns, show="headings", height=8, selectmode="browse")
-    for key, label, width in zip(columns, ["IP address", "Active MAC", "Die °C", "Network", "Last seen", "Latest event"], [130, 160, 80, 90, 80, 250]):
+    for key, label, width in zip(columns, ["IP address", "Active MAC", "Die °C", "Measured hashrate", "Job # / pool ID", "Submitted / accepted / rejected", "Network", "Last seen"], [120, 155, 65, 140, 230, 210, 75, 70]):
         table.heading(key, text=label);table.column(key, width=width)
     table.pack(fill="x")
+    live = tk.StringVar(value="Select a miner to inspect live counters.")
+    ttk.Label(pane, textvariable=live, wraplength=1250).pack(anchor="w", pady=5)
     form = ttk.LabelFrame(pane, text="Save complete configuration to selected miner", padding=10)
     form.pack(fill="x", pady=10)
     fields = {}
@@ -148,7 +243,11 @@ def gui(args):
         ttk.Entry(form, textvariable=var, width=75, show="*" if key == "password" else "").grid(row=row, column=1, sticky="ew", pady=2)
         fields[key] = var
     form.columnconfigure(1, weight=1)
-    ttk.Label(form, text="Blank pool host disables mining. Existing credentials are never broadcast or read back.").grid(row=5, column=0, columnspan=2, sticky="w")
+    edit_password = tk.BooleanVar(value=False)
+    ttk.Checkbutton(form, text="Replace stored password (unchecked = preserve; checked + blank = clear)",
+                    variable=edit_password).grid(row=5, column=0, columnspan=2, sticky="w")
+    settings_status = tk.StringVar(value="Select a miner to read its saved settings. Passwords are never read back.")
+    ttk.Label(form, textvariable=settings_status, wraplength=1150).grid(row=6, column=0, columnspan=2, sticky="w")
     log = tk.Text(pane, height=9, state="disabled", wrap="word")
     log.pack(fill="both", expand=True)
     def append(text):
@@ -157,10 +256,39 @@ def gui(args):
         if int(log.index("end-1c").split(".")[0]) > 500:
             log.delete("1.0", "100.0")
         log.see("end");log.configure(state="disabled")
-    def selected(_event=None):
+    form_state = SettingsFormState()
+    loading_form = False
+    def edited(*_args):
+        if not loading_form:
+            form_state.edited()
+    for var in fields.values():
+        var.trace_add("write", edited)
+    edit_password.trace_add("write", edited)
+    def load_settings():
         selection = table.selection()
-        if selection:
+        if not selection:
+            return
+        token = form_state.begin_read()
+        settings_status.set("Reading saved settings from EEPROM…")
+        save_button.configure(state="disabled")
+        def worker():
+            try:
+                messages.put(("settings_read", (token, read_settings(selection[0]))))
+            except (OSError, ValueError) as exc:
+                messages.put(("read_error", (token, str(exc))))
+        threading.Thread(target=worker, daemon=True).start()
+    def selected(_event=None):
+        nonlocal loading_form
+        selection = table.selection()
+        if selection and selection[0] != form_state.ip:
+            form_state.select(selection[0])
+            loading_form = True
+            for key, var in fields.items():
+                var.set("3333" if key == "port" else "")
             fields["mac"].set(miners[selection[0]]["mac"])
+            edit_password.set(False)
+            loading_form = False
+            load_settings()
     table.bind("<<TreeviewSelect>>", selected)
     def save():
         selection = table.selection()
@@ -168,23 +296,31 @@ def gui(args):
             messagebox.showerror("Select a miner", "Select a discovered miner first.");return
         ip = selection[0]
         try:
-            values = validate_settings({key: var.get() for key, var in fields.items()})
+            raw = {key: var.get() for key, var in fields.items() if key != "password" or edit_password.get()}
+            values = validate_settings(raw)
         except ValueError as exc:
             messagebox.showerror("Invalid settings", str(exc));return
         if not messagebox.askyesno("Write EEPROM", f"Save these settings to {ip}?\nPool settings reconnect immediately. MAC changes require a board reboot."):
             return
         save_button.configure(state="disabled")
+        token = form_state.token()
         def worker():
             try:
                 reply = configure(ip, values)
-                messages.put(("saved", (ip, reply)))
+                messages.put(("saved", (token, reply)))
             except (OSError, ValueError) as exc:
-                messages.put(("save_error", str(exc)))
+                messages.put(("save_error", (token, str(exc))))
         threading.Thread(target=worker, daemon=True).start()
     save_button = ttk.Button(form, text="Save to EEPROM", command=save)
-    save_button.grid(row=6, column=1, sticky="e", pady=6)
-    ttk.Label(form, text="FPGA reboot: not yet supported; use PROGRAM_B / power cycle").grid(row=6, column=0, sticky="w")
+    save_button.grid(row=7, column=1, sticky="e", pady=6)
+    save_button.configure(state="disabled")
+    def reload_settings():
+        if form_state.revision and not messagebox.askyesno("Reload settings", "Discard local edits and reload EEPROM settings?"):
+            return
+        load_settings()
+    ttk.Button(form, text="Read EEPROM settings", command=reload_settings).grid(row=7, column=0, sticky="w")
     def update():
+        nonlocal loading_form
         for _ in range(100):
             try:
                 kind, value = messages.get_nowait()
@@ -196,22 +332,62 @@ def gui(args):
                     table.insert("", "end", iid=ip);append(f"Discovered {ip} ({value['mac']})")
                 identity = (value["uptime_ms"] // 1000, value["event_seq"])
                 if value["event"] != "status" and last_events.get(ip) != identity:
-                    append(f"{ip}: {value['event']}");last_events[ip] = identity
+                    append(f"{ip}: {format_event(value)}");last_events[ip] = identity
+            elif kind == "settings_read":
+                token, reply = value
+                if token[:2] != form_state.token()[:2]:
+                    continue
+                save_button.configure(state="normal")
+                if not form_state.accepts(token):
+                    settings_status.set("Read completed; newer local edits were preserved. Use Read EEPROM settings to reload.")
+                    continue
+                loading_form = True
+                for key in ("mac", "host", "port", "worker"):
+                    fields[key].set(str(reply[key]))
+                fields["password"].set("");edit_password.set(False)
+                loading_form = False
+                form_state.revision = 0
+                note = "Saved EEPROM settings loaded" if reply["stored"] else "No valid EEPROM settings; defaults shown"
+                note += "; password " + ("stored (preserved unless replaced)" if reply["password_set"] else "not set")
+                if reply["mac"] != reply["active_mac"]:
+                    note += f"; active MAC remains {reply['active_mac']} until reboot"
+                settings_status.set(note)
+            elif kind == "read_error":
+                token, error = value
+                if token[:2] == form_state.token()[:2]:
+                    save_button.configure(state="normal")
+                    settings_status.set("Read failed: " + error + ". Older firmware may need updating.")
             elif kind == "saved":
-                ip, reply = value;save_button.configure(state="normal")
+                token, reply = value;ip = token[0]
+                if token[:2] == form_state.token()[:2]:
+                    save_button.configure(state="normal")
                 if reply["ok"]:
-                    fields["password"].set("");append(f"{ip}: settings saved; MAC changes need reboot")
+                    append(f"{ip}: settings saved; MAC changes need reboot")
+                    if form_state.accepts(token):
+                        load_settings()
                 else:
                     messagebox.showerror("Save failed", str(reply.get("error", "Unknown error")))
             elif kind == "save_error":
-                save_button.configure(state="normal");messagebox.showerror("Save failed", value)
+                token, error = value
+                if token[:2] == form_state.token()[:2]:
+                    save_button.configure(state="normal")
+                messagebox.showerror("Save failed", error)
             elif kind == "error":
                 status.set(value)
         now = time.monotonic()
         for ip, item in miners.items():
             age = now - item["seen"]
             table.item(ip, values=(ip, item["mac"], f"{item['temp_centi']/100:.2f}",
-                "stale" if age > 5 else "up" if item.get("network_up") else "down", f"{age:.0f}s", item["event"]))
+                "stale" if age > 5 else format_hashrate(item), f"{item.get('job_number', '—')} / {item.get('job_id', '—')}",
+                f"{item.get('shares_submitted', '—')} / {item.get('shares_accepted', '—')} / {item.get('shares_rejected', '—')}",
+                "stale" if age > 5 else "up" if item.get("network_up") else "down", f"{age:.0f}s"))
+        if form_state.ip in miners:
+            item = miners[form_state.ip]
+            freshness = "STALE — " if now-item["seen"] > 5 else ""
+            live.set(f"{freshness}{form_state.ip}: pool {'authorized' if item.get('pool_authorized') else 'not authorized'} | "
+                     f"mining {'active' if item.get('mining') else 'idle'} | completed hashes {item.get('hashes_total', 'unavailable')} | "
+                     f"sample {item.get('hashrate_sample_ms', 0)} ms | hardware errors {item.get('hardware_errors', 0)} | "
+                     f"events dropped {item.get('events_dropped', 0)} | {format_versions(item)}")
         status.set(f"{sum(now-m['seen'] < 5 for m in miners.values())} live / {len(miners)} discovered")
         root.after(100, update)
     def close():
@@ -222,6 +398,7 @@ def gui(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--version", action="version", version=f"SCU35 dashboard {DASHBOARD_VERSION}")
     parser.add_argument("--broadcast", action="append", help="Directed broadcast or miner IPv4 address; repeat for multiple interfaces")
     parser.add_argument("--headless", action="store_true", help="Print telemetry without tkinter")
     parser.add_argument("--seconds", type=float, default=0, help="Headless duration; zero runs until interrupted")

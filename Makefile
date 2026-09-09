@@ -1,7 +1,7 @@
 VIVADO ?= vivado
 RTL := $(wildcard rtl/*.sv)
 
-.PHONY: bd review sim synth platform bootloader application implement images image-base package test
+.PHONY: bd review sim synth platform bootloader application implement images image-base package test test-hybrid
 platform:
 	/tools/Xilinx/2026.1/Vitis/bin/vitis -s software/build_platform.py
 bootloader:
@@ -26,9 +26,14 @@ test: sim
 	build/test_settings
 	gcc -std=c11 -Wall -Wextra -Werror -Isoftware/common -Ithird_party/FreeRTOS-LTS/FreeRTOS/coreJSON/source/include tb/test_json.c third_party/FreeRTOS-LTS/FreeRTOS/coreJSON/source/core_json.c -o build/test_json
 	build/test_json
+	gcc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Isoftware/common -Ithird_party/FreeRTOS-LTS/FreeRTOS/coreJSON/source/include tb/test_miner_protocol.c software/common/miner_protocol.c software/common/settings.c third_party/FreeRTOS-LTS/FreeRTOS/coreJSON/source/core_json.c -o build/test_miner_protocol
+	build/test_miner_protocol
 	python3 tb/test_bitcoin.py
 	python3 tb/test_dashboard.py
 	bash tb/test_network.sh
+	bash tb/test_stratum_telemetry.sh
+test-hybrid:
+	bash scripts/test_hybrid_xsim.sh
 synth:
 	mkdir -p logs
 	$(VIVADO) -mode batch -source scripts/build_hardware.tcl -log logs/hardware.log -journal logs/hardware.jou
@@ -48,3 +53,7 @@ sim:
 	build/sim/genesis/Vtb_genesis
 	verilator --binary --timing -Wno-fatal --top-module tb_resets --Mdir build/sim/resets rtl/irq_sync.sv rtl/phy_reset_hold.sv tb/tb_resets.sv > build/sim/resets_compile.log 2>&1
 	build/sim/resets/Vtb_resets
+	verilator --binary --timing -Wno-fatal --top-module tb_genesis -GHYBRID=1 --Mdir build/sim/genesis_hybrid $(RTL) tb/tb_genesis.sv > build/sim/genesis_hybrid_compile.log 2>&1
+	build/sim/genesis_hybrid/Vtb_genesis
+	verilator --binary --timing -Wno-fatal --top-module tb_bitcoin_miner_axi -GHYBRID=1 --Mdir build/sim/miner_hybrid $(RTL) tb/tb_bitcoin_miner_axi.sv > build/sim/miner_hybrid_compile.log 2>&1
+	build/sim/miner_hybrid/Vtb_bitcoin_miner_axi

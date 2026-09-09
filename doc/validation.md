@@ -1,6 +1,9 @@
 # Validation and board bring-up
 
-## Completed on 2026-09-09
+For the subsequent local hybrid variant, see [hybrid validation](hybrid_dsp48.md).
+The physical board tests below apply to the fabric implementation.
+
+## Fabric implementation completed on 2026-09-09
 
 - Vivado 2026.1 BD validation, address/clock/reset audit, synthesis, placement,
   routing, DRC, CDC inspection, bitstream, and normal SpartanUP PDI generation.

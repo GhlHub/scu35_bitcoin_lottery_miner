@@ -2,7 +2,8 @@
 
 module sha256_core_iterative #(
     parameter bit EXPLICIT_DSP_SCHEDULE = 1'b0,
-    parameter bit FOUR_PHASE = 1'b0
+    parameter bit FOUR_PHASE = 1'b0,
+    parameter bit DSP_ROUND_STATE = 1'b1
 ) (
     input  wire         clk_i,
     input  wire         rst_ni,
@@ -53,6 +54,7 @@ module sha256_core_iterative #(
     reg [31:0] w_m16_q;
     reg [31:0] w_ab_q;
     reg [31:0] w_cd_q;
+    reg [31:0] t1_ab_q;
     wire [31:0] a_next;
     wire [31:0] e_next;
     wire [31:0] digest_h0;
@@ -138,8 +140,23 @@ module sha256_core_iterative #(
         endcase
     endfunction
 
-    assign a_next = t1_q + t2_q;
-    assign e_next = d_q + t1_q;
+    wire [31:0] round_t1_a, round_t1_b, round_t2;
+    generate
+        if (EXPLICIT_DSP_SCHEDULE && DSP_ROUND_STATE) begin : g_dsp_round_state
+            // Move only these five additions; preserve the phase boundaries.
+            dsp48e2_add32 u_round_t1_a (.a_i(h_q), .b_i(big_sigma1(e_q)), .sum_o(round_t1_a));
+            dsp48e2_add32 u_round_t1_b (.a_i(ch(e_q,f_q,g_q)), .b_i(k(round_q)), .sum_o(round_t1_b));
+            dsp48e2_add32 u_round_t2 (.a_i(big_sigma0(a_q)), .b_i(maj(a_q,b_q,c_q)), .sum_o(round_t2));
+            dsp48e2_add32 u_state_a (.a_i(t1_q), .b_i(t2_q), .sum_o(a_next));
+            dsp48e2_add32 u_state_e (.a_i(d_q), .b_i(t1_q), .sum_o(e_next));
+        end else begin : g_fabric_round_state
+            assign round_t1_a = h_q + big_sigma1(e_q);
+            assign round_t1_b = ch(e_q,f_q,g_q) + k(round_q);
+            assign round_t2 = big_sigma0(a_q) + maj(a_q,b_q,c_q);
+            assign a_next = t1_q + t2_q;
+            assign e_next = d_q + t1_q;
+        end
+    endgenerate
     assign digest_h0 = h0_q + a_next;
     assign digest_h1 = h1_q + a_q;
     assign digest_h2 = h2_q + b_q;
@@ -151,22 +168,22 @@ module sha256_core_iterative #(
 
     generate
         if (EXPLICIT_DSP_SCHEDULE) begin : g_explicit_dsp_schedule
-            dsp58_add32 u_w_ab (.a_i(w_s1_q), .b_i(w_m7_q), .sum_o(w_ab_add));
-            dsp58_add32 u_w_cd (.a_i(w_s0_q), .b_i(w_m16_q), .sum_o(w_cd_add));
-            dsp58_add32 u_w_new (.a_i(w_ab_q), .b_i(w_cd_q), .sum_o(w_new_add));
+            dsp48e2_add32 u_w_ab (.a_i(w_s1_q), .b_i(w_m7_q), .sum_o(w_ab_add));
+            dsp48e2_add32 u_w_cd (.a_i(w_s0_q), .b_i(w_m16_q), .sum_o(w_cd_add));
+            dsp48e2_add32 u_w_new (.a_i(w_ab_q), .b_i(w_cd_q), .sum_o(w_new_add));
             if (FOUR_PHASE) begin : g_four_phase_t1_dsp
-                dsp58_add32 u_t1_ab (.a_i(t1_a_q), .b_i(t1_b_q), .sum_o(t1_ab_add));
-                dsp58_add32 u_t1_total (.a_i(t1_ab_add), .b_i(t1_w_add), .sum_o(t1_total_add));
+                dsp48e2_add32 u_t1_ab (.a_i(t1_a_q), .b_i(t1_b_q), .sum_o(t1_ab_add));
+                dsp48e2_add32 u_t1_total (.a_i(t1_ab_q), .b_i(t1_w_add), .sum_o(t1_total_add));
             end else begin : g_five_phase_t1_fabric
                 assign t1_ab_add = t1_a_q + t1_b_q;
-                assign t1_total_add = t1_ab_add + t1_w_add;
+                assign t1_total_add = t1_ab_q + t1_w_add;
             end
         end else begin : g_fabric_schedule
             assign w_ab_add = w_s1_q + w_m7_q;
             assign w_cd_add = w_s0_q + w_m16_q;
             assign w_new_add = w_ab_q + w_cd_q;
             assign t1_ab_add = t1_a_q + t1_b_q;
-            assign t1_total_add = t1_ab_add + t1_w_add;
+            assign t1_total_add = t1_ab_q + t1_w_add;
         end
     endgenerate
 
@@ -207,10 +224,10 @@ module sha256_core_iterative #(
                 busy_q <= 1'b1;
             end else if (busy_q) begin
                 if (phase_q == 3'd0) begin
-                    t1_a_q <= h_q + big_sigma1(e_q);
-                    t1_b_q <= ch(e_q, f_q, g_q) + k(round_q);
+                    t1_a_q <= round_t1_a;
+                    t1_b_q <= round_t1_b;
                     t1_c_q <= w_mem[w_idx];
-                    t2_q <= big_sigma0(a_q) + maj(a_q, b_q, c_q);
+                    t2_q <= round_t2;
                     w_s1_q <= small_sigma1(w_mem[w_idx_m2]);
                     w_m7_q <= w_mem[w_idx_m7];
                     w_s0_q <= small_sigma0(w_mem[w_idx_m15]);
@@ -219,6 +236,9 @@ module sha256_core_iterative #(
                 end else if (phase_q == 3'd1) begin
                     w_ab_q <= w_ab_add;
                     w_cd_q <= w_cd_add;
+                    // T1's partial sum is available a phase before W_new.
+                    // Register it here rather than cascading three adders.
+                    if (FOUR_PHASE) t1_ab_q <= t1_ab_add;
                     phase_q <= 3'd2;
                 end else if (phase_q == 3'd2) begin
                     w_new_q <= w_new_add;

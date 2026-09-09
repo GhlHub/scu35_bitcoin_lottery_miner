@@ -2,7 +2,8 @@
 
 module bitcoin_hash_engine #(
     parameter int unsigned NONCE_STRIDE = 1,
-    parameter bit EXPLICIT_DSP_SCHEDULE = 1'b0
+    parameter bit EXPLICIT_DSP_SCHEDULE = 1'b0,
+    parameter bit DSP_ROUND_STATE = 1'b1
 ) (
     input  wire         clk_i,
     input  wire         rst_ni,
@@ -14,6 +15,7 @@ module bitcoin_hash_engine #(
     input  wire [31:0]  nonce_start_i,
     input  wire [31:0]  nonce_count_i,
     output wire         busy_o,
+    output wire         hash_complete_o,
     output reg          done_o,
     output reg          result_valid_o,
     output reg  [31:0]  result_nonce_o
@@ -52,17 +54,10 @@ module bitcoin_hash_engine #(
     end
 
     assign busy_o = (state_q != ST_IDLE) || core_busy;
+    // One pulse per completed double hash, independent of share difficulty.
+    assign hash_complete_o = (state_q == ST_PASS2) && core_done;
 
-    generate
-    if (EXPLICIT_DSP_SCHEDULE) begin : g_explicit_dsp
-    bitcoin_sha256_core_dsp_explicit u_core (
-        .clk_i(clk_i), .rst_ni(rst_ni), .start_i(core_start_q),
-        .first_pass_i(core_first_pass_q), .midstate_i(midstate_q),
-        .header_tail_i(header_tail_q), .nonce_i(nonce_q), .first_digest_i(digest_q),
-        .busy_o(core_busy), .done_o(core_done), .digest_o(core_digest)
-    );
-    end else begin : g_default
-    bitcoin_sha256_core u_core (
+    bitcoin_sha256_core #(.HYBRID_DSP48(EXPLICIT_DSP_SCHEDULE), .DSP_ROUND_STATE(DSP_ROUND_STATE)) u_core (
         .clk_i(clk_i),
         .rst_ni(rst_ni),
         .start_i(core_start_q),
@@ -75,8 +70,6 @@ module bitcoin_hash_engine #(
         .done_o(core_done),
         .digest_o(core_digest)
     );
-    end
-    endgenerate
 
     always @(posedge clk_i or negedge rst_ni) begin
         if (!rst_ni) begin

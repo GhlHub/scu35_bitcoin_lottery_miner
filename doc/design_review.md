@@ -3,6 +3,13 @@
 This records the original design choice and review. The user approved the BD
 on 2026-09-09. Implementation/firmware/dashboard are now built; current measured
 results and remaining physical tests are in [validation.md](validation.md).
+The subsequent four-phase DSP48E2 variant is described in
+[hybrid_dsp48.md](hybrid_dsp48.md); the resource estimates below are historical.
+The current [three-lane build](three_lane_build.md) retains these clocks,
+resets, and peripheral addresses, and adds [component versions](versions.md).
+The subsequent [hardware 1.1.0 experiment](hash210_build.md) was withdrawn.
+Current source again shares the 200 MHz clock/reset between hashing and
+HyperBus; see the [restoration report](restored200_build.md).
 
 ## Resource choice
 

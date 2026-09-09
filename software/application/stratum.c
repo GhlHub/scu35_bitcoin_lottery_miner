@@ -16,6 +16,7 @@
 #define RANGE 0x01000000U
 typedef struct {
     char id[128],time[9];
+    uint32_t number;
     uint8_t prev[32],version[4],bits[4],coin1[4096],coin2[4096],branches[32][32];
     size_t n1,n2,nb;
     uint32_t target[8];
@@ -24,7 +25,7 @@ static pool_job job;
 static uint8_t extra1[32],extra2[16],header[80];
 static size_t extra1_size,extra2_size;
 static uint32_t pending_target[8],range_start,next_id;
-static struct {uint32_t id;TickType_t sent;} pending[8];
+static struct {uint32_t id;TickType_t sent;miner_event event;} pending[8];
 static char line[LINE_MAX],extra2_hex[33];
 static int subscribed,authorized,have_job,running,extra_exhausted;
 static Socket_t connection;
@@ -34,7 +35,7 @@ static void reg_write(unsigned a,uint32_t v){Xil_Out32(MINER+a,v);}
 static void stop(void){
     reg_write(0xa0,1); /* poll result FIFO; no interrupt storm */
     reg_write(0,2);vTaskDelay(1); /* let an in-flight compression finish */
-    reg_write(0,4);reg_write(0x98,3);running=0;
+    reg_write(0,4);reg_write(0x98,3);running=0;telemetry_mining(0);
 }
 static int send_line(const char *s){
     size_t n=strlen(s),sent=0;
@@ -47,7 +48,7 @@ static int json_hex(const char *s,size_t n,const char *query,uint8_t *out,size_t
     return hex_decode(v,len,out,cap);
 }
 static void start_range(void){
-    reg_write(0,4);reg_write(0x80,range_start);reg_write(0x84,RANGE);reg_write(0,1);running=1;
+    reg_write(0,4);reg_write(0x80,range_start);reg_write(0x84,RANGE);reg_write(0,1);running=1;telemetry_mining(1);
 }
 static int build_header(void){
     if(extra_exhausted)return -1;
@@ -102,7 +103,7 @@ static int notification(const char *s,size_t n){
         job.nb++;
     }
     memcpy(job.target,pending_target,sizeof(job.target));have_job=1;
-    telemetry_event("mining_job_received");return authorized?build_header():0;
+    job.number=telemetry_job(job.id);return authorized?build_header():0;
 }
 static int reply(const char *s,size_t n){
     uint32_t id;if(json_u32(s,n,"id",&id))return 0;
@@ -122,7 +123,9 @@ static int reply(const char *s,size_t n){
         return have_job?build_header():0;
     }
     for(unsigned i=0;i<8;i++)if(id>=4&&pending[i].id==id){
-        pending[i].id=0;telemetry_event(json_true(s,n,"result")?"solution_accepted":"solution_rejected");break;
+        pending[i].id=0;
+        snprintf(pending[i].event.name,sizeof(pending[i].event.name),"%s",json_true(s,n,"result")?"solution_accepted":"solution_rejected");
+        telemetry_detail(&pending[i].event);break;
     }
     return 0;
 }
@@ -150,11 +153,18 @@ static int service_results(void){
         if(slot<0){telemetry_event("share_queue_full");return -1;}
         if(next_id<4)return -1;
         uint32_t id=next_id++;
-        char request[640];snprintf(request,sizeof(request),
+        char request[640];int length=snprintf(request,sizeof(request),
             "{\"id\":%lu,\"method\":\"mining.submit\",\"params\":[\"%s\",\"%s\",\"%s\",\"%s\",\"%08lx\"]}\n",
             (unsigned long)id,session.worker,job.id,extra2_hex,job.time,(unsigned long)bitcoin_swap32(nonce));
+        if(length<=0||(size_t)length>=sizeof(request))return -1;
         if(send_line(request))return -1;
-        pending[slot].id=id;pending[slot].sent=xTaskGetTickCount();telemetry_event("solution_submitted");
+        pending[slot].id=id;pending[slot].sent=xTaskGetTickCount();
+        miner_event *event=&pending[slot].event;memset(event,0,sizeof(*event));
+        strcpy(event->name,"solution_submitted");strcpy(event->job_id,job.id);event->job_number=job.number;
+        strcpy(event->submission,request);
+        /* Display the conventional Bitcoin hash, reversing raw SHA bytes. */
+        uint8_t display_hash[32];for(unsigned i=0;i<32;i++)display_hash[i]=digest[31-i];
+        hex_encode(display_hash,32,event->hash);telemetry_detail(event);
     }
     if((reg_read(4)&4)&&!(reg_read(0x98)&1)){
         range_start+=RANGE;
@@ -196,7 +206,9 @@ static void stratum_task(void *unused){
                 }
                 TickType_t now=xTaskGetTickCount();
                 if(bad||(!authorized&&now-started>pdMS_TO_TICKS(15000))||now-last>pdMS_TO_TICKS(120000)||service_results())break;
-                for(unsigned i=0;i<8;i++)if(pending[i].id&&now-pending[i].sent>pdMS_TO_TICKS(30000)){telemetry_event("share_reply_timeout");bad=1;}
+                for(unsigned i=0;i<8;i++)if(pending[i].id&&now-pending[i].sent>pdMS_TO_TICKS(30000)){
+                    strcpy(pending[i].event.name,"share_reply_timeout");telemetry_detail(&pending[i].event);bad=1;
+                }
                 if(bad)break;
             }
         }

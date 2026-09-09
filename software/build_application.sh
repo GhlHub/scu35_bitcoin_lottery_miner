@@ -13,7 +13,7 @@ mkdir -p build/application
   -mxl-pattern-compare -mno-xl-soft-mul -mno-xl-soft-div -mcpu=v11.0 -DSDT \
   -specs="$bsp/Xilinx.spec" -I"$bsp/include" -Isoftware/application -Isoftware/common \
   -I"$kernel/include" -I"$port" -I"$tcp/include" -I"$tcp/portable/Compiler/GCC" -I"$json/include" \
-  software/application/*.c software/common/console.c software/common/settings.c software/common/bitcoin.c software/common/sha256_sw.c \
+  software/application/*.c software/common/console.c software/common/settings.c software/common/bitcoin.c software/common/sha256_sw.c software/common/miner_protocol.c \
   "$kernel/tasks.c" "$kernel/queue.c" "$kernel/list.c" "$kernel/timers.c" \
   "$kernel/event_groups.c" "$kernel/stream_buffer.c" "$kernel/portable/MemMang/heap_4.c" \
   "$port/port.c" "$port/portasm.S" "$port/portmicroblaze.c" "$port/port_exceptions.c" \
