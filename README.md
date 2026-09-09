@@ -4,6 +4,16 @@ Target: AMD SCU35, `xcsu35p-sbvb625-2-e`, Vivado/Vitis 2026.1.
 Requirements are in [initial_prompt.txt](initial_prompt.txt); MicroBlaze is
 fixed at **50 MHz** by the subsequent user instruction.
 
+## Dashboard
+
+The dashboard displays live hashrate, mining jobs, share counters, temperature,
+and component versions, and reads saved configuration from EEPROM.
+
+![SCU35 dashboard showing three mining lanes at 1.139 MH/s, eight accepted shares, and saved EEPROM settings with the wallet redacted](doc/dashboard_snapshot.png)
+
+User-provided snapshot: 1.139 MH/s, eight submitted and accepted shares,
+and zero reported hardware errors. The wallet is redacted.
+
 ## Build status
 
 The current **three-lane, hardware 1.0.0** configuration has been restored:
@@ -26,7 +36,8 @@ Synthesis, routing, image generation, and automated tests pass. The SCU35 on
 2026-09-09. Bring-up has demonstrated HyperRAM calibration, application startup,
 FreeRTOS ticks, DHCP, dashboard discovery/temperature telemetry, pool
 authorization, and mining-job reception with both caches enabled. Accepted
-shares and long-duration stability have not yet been verified.
+shares were subsequently reported in the user-provided dashboard snapshot
+above; long-duration stability has not yet been independently verified.
 
 The board-tested fabric design uses 11,281/16,320 LUTs (69.12%), 13,379 registers,
 17.5/48 BRAM tiles, and 3/48 DSPs. Both mining engines use fabric; the DSPs belong
