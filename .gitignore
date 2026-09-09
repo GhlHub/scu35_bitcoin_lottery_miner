@@ -1,0 +1,12 @@
+/build/
+/logs/
+/.Xil/
+/.srcs/
+/third_party/
+__pycache__/
+*.jou
+*.log
+*.logfile
+*.pyc
+.env
+.env.*

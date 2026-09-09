@@ -1,0 +1,28 @@
+I want you to use my existing vek280 bitcoin miner at /raid/work/vek280_bitcoin_miner as a reference and build a bitcoin miner for the scu35 evaluation board. Since the xcsu35p fpga has modest resources, this is effectively a lottery miner. 
+
+The xcsu35p miner should have a microblaze controller, 16k of local block ram.
+There should be the following peripherals:
+	http://github.com/GhlHub/hyperbus_controller
+	http://github.com/GhlHub/e_uart
+	I2C interface to communicate to the i2c eeprom on board.
+	EthernetLite
+	Timer for FreeRTOS to use
+	SysMon
+	
+Examine the sha256 engines in the VEK280 design vs. the resources available on the xcsu35p and determine an appropraite number of sha256 engines for the xcsu35p design. Feel free to use only LUTS or DSP cores or a mix of the two to balance the overrall utilization of the fpga's resources.
+
+The microblaze local block ram should have a bootloader. The bootloader will be baremetal. The bootloader should calibrate the hyperbus controller and then load an application stored in srec format in the qspi flash into the hyperram. Use the example bootloader in the hyperbus_controller repo as a reference.
+
+For the microblaze application, we will use http://github.com/FreeRTOS/FreeRTOS-LTS branch 202604-LTS. 
+
+Before starting the network interface, the application should read the eeprom for a mac address to use.
+
+If a mac address is not present in the eeprom use 02:00:00:11:22:33. Once the mac address has been read, then the network interface can be initialized. Use DHCP to automatically acquire an ip address.
+
+The application should also support a discovery protocol. Create a python dashboard that has a dashboard and can use the discovery protocol to locate miners on the local network. The dashboard can be used to enter a mac address, mining credentials. The dashboard can also display telemetry from the miner.
+
+The application should have a stratum client to receive jobs and submit solutions to the mining pool. Mining credentials should be stored in eeprom. The application will send real time telemetry when the dashboard is present. The real time telemetry will include things like mining job received, solution submitted, die temp, etc. If possible include a way for the user to initiate a fpga reboot.
+
+When you create the block design, open the block design so I can review the block design and inspect the resets. After I have inspected the block design, you may proceed with synthesis.
+
+
