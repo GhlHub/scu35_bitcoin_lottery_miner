@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Trusted-LAN protocol; no credentials are broadcast or included in telemetry. */
+/* Trusted-LAN protocol: non-secret configuration readback is explicit TCP only.
+ * Unicast share events contain mining.submit (worker/job/nonce), never passwords. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,15 +12,45 @@
 #include "json_helpers.h"
 #include "xparameters.h"
 #include "xil_io.h"
+#include "versions.h"
 #if XPAR_XSYSMON_0_IP_TYPE != 1
 #error This temperature conversion requires UltraScale System Management IP
 #endif
 static QueueHandle_t events;
 static uint32_t event_seq;
+static miner_stats stats;
 extern int ethernet_phy_known(void);
+void telemetry_detail(const miner_event *event){
+    taskENTER_CRITICAL();
+    if(!strcmp(event->name,"solution_submitted"))stats.submitted++;
+    if(!strcmp(event->name,"solution_accepted"))stats.accepted++;
+    if(!strcmp(event->name,"solution_rejected"))stats.rejected++;
+    if(!strcmp(event->name,"hardware_solution_invalid"))stats.invalid++;
+    if(!strcmp(event->name,"pool_connected"))stats.connected=1;
+    if(!strcmp(event->name,"pool_authorized"))stats.authorized=1;
+    if(!strcmp(event->name,"pool_disconnected")){
+        stats.connected=stats.authorized=stats.mining=0;stats.job_id[0]=0;
+    }
+    taskEXIT_CRITICAL();
+    if(events&&xQueueSend(events,event,0)!=pdPASS){
+        taskENTER_CRITICAL();stats.dropped++;taskEXIT_CRITICAL();
+    }
+}
 void telemetry_event(const char *event){
-    char item[64];snprintf(item,sizeof(item),"%s",event);
-    if(events)xQueueSend(events,item,0);
+    miner_event item={0};snprintf(item.name,sizeof(item.name),"%s",event);
+    taskENTER_CRITICAL();
+    item.job_number=stats.jobs;memcpy(item.job_id,stats.job_id,sizeof(item.job_id));
+    taskEXIT_CRITICAL();
+    telemetry_detail(&item);
+}
+uint32_t telemetry_job(const char *id){
+    taskENTER_CRITICAL();
+    stats.jobs++;snprintf(stats.job_id,sizeof(stats.job_id),"%s",id);
+    uint32_t number=stats.jobs;taskEXIT_CRITICAL();
+    telemetry_event("mining_job_received");return number;
+}
+void telemetry_mining(int active){
+    taskENTER_CRITICAL();stats.mining=active;taskEXIT_CRITICAL();
 }
 static Socket_t bound_socket(BaseType_t type,uint16_t port){
     Socket_t s=FreeRTOS_socket(FREERTOS_AF_INET,type,type==FREERTOS_SOCK_DGRAM?FREERTOS_IPPROTO_UDP:FREERTOS_IPPROTO_TCP);
@@ -33,7 +64,10 @@ static void broadcast_task(void *unused){
     (void)unused;
     struct {struct freertos_sockaddr peer;TickType_t last;int used;} clients[4]={0};
     Socket_t s=bound_socket(FREERTOS_SOCK_DGRAM,4028);configASSERT(s!=FREERTOS_INVALID_SOCKET);
-    char request[80],message[512],event[64]="status";uint32_t seq=0;TickType_t last_status=0;
+    char request[80],message[2048];miner_event event;uint32_t seq=0;TickType_t last_status=0;
+    TickType_t sampled=xTaskGetTickCount();
+    int counter_present=Xil_In32(0x44a300a8U)==0x48534831U;
+    uint32_t previous=counter_present?Xil_In32(0x44a300acU):0;
     for(;;){
         struct freertos_sockaddr peer; socklen_t plen=sizeof(peer);
         BaseType_t n=FreeRTOS_recvfrom(s,request,sizeof(request)-1,0,&peer,&plen);
@@ -50,22 +84,27 @@ static void broadcast_task(void *unused){
                 if(slot>=0){clients[slot].peer=peer;clients[slot].last=now;clients[slot].used=1;}
             }
         }
-        int pending=xQueueReceive(events,event,0)==pdPASS;
-        if(!pending)strcpy(event,"status");else event_seq++;
+        if(counter_present && now-sampled>=pdMS_TO_TICKS(1000)){
+            uint32_t count=Xil_In32(0x44a300acU),delta=count-previous;
+            taskENTER_CRITICAL();
+            stats.hashrate_hps=miner_hashrate(previous,count,now-sampled,configTICK_RATE_HZ);
+            stats.hashes_total+=delta;stats.sample_ms=(now-sampled)*portTICK_PERIOD_MS;
+            stats.hashrate_valid=1;taskEXIT_CRITICAL();
+            previous=count;sampled=now;
+        }
+        memset(&event,0,sizeof(event));
+        int pending=xQueueReceive(events,&event,0)==pdPASS;
+        if(!pending)strcpy(event.name,"status");else event_seq++;
         if(!discovery&&!pending&&now-last_status<pdMS_TO_TICKS(1000))continue;
         last_status=now;
         /* UltraScale SYSMON temperature is at AXI offset 0x400, not the
          * 7-series XADC offset selected by legacy SDT header defaults. */
         uint32_t raw=Xil_In32(XPAR_XSYSMON_0_BASEADDR+0x400)&0xffffU;
         int centi=(int)(((uint64_t)raw*5013743U)/6553600U)-27367;
-        int count=snprintf(message,sizeof(message),
-            "{\"protocol\":\"SCU35/1\",\"seq\":%lu,\"event_seq\":%lu,\"event\":\"%s\","
-            "\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"uptime_ms\":%lu,"
-            "\"temp_centi\":%d,\"cpu_mhz\":50,\"engines\":2,\"network_up\":%s,"
-            "\"phy_known\":%s,\"reboot_supported\":false,\"config_port\":4029}",
-            (unsigned long)++seq,(unsigned long)event_seq,event,
-            active_mac[0],active_mac[1],active_mac[2],active_mac[3],active_mac[4],active_mac[5],
-            (unsigned long)(now*portTICK_PERIOD_MS),centi,network_up?"true":"false",ethernet_phy_known()?"true":"false");
+        miner_stats snapshot;
+        taskENTER_CRITICAL();snapshot=stats;taskEXIT_CRITICAL();
+        int count=miner_telemetry_json(message,sizeof(message),&snapshot,&event,++seq,event_seq,
+            now*portTICK_PERIOD_MS,centi,active_mac,network_up,ethernet_phy_known());
         if(count<=0||(size_t)count>=sizeof(message))continue;
         if(discovery)FreeRTOS_sendto(s,message,count,0,&peer,sizeof(peer));
         for(int i=0;i<4;i++)if(clients[i].used){
@@ -74,33 +113,33 @@ static void broadcast_task(void *unused){
         }
     }
 }
-static int parse_mac(const char *s,uint8_t mac[6]){
-    if(strlen(s)!=17)return -1;
-    for(unsigned i=0;i<6;i++){
-        unsigned value=0;
-        for(unsigned j=0;j<2;j++){
-            char c=s[3*i+j];int v=c>='0'&&c<='9'?c-'0':c>='a'&&c<='f'?c-'a'+10:c>='A'&&c<='F'?c-'A'+10:-1;
-            if(v<0)return -1;
-            value=value*16+(unsigned)v;
-        }
-        mac[i]=(uint8_t)value;if(i<5&&s[3*i+2]!=':')return -1;
-    }
-    return 0;
-}
 static const char *configure(const char *line,size_t n){
-    char command[16],macstr[18];uint32_t port;miner_settings next={0};
-    if(JSON_Validate(line,n)!=JSONSuccess||json_string(line,n,"command",command,sizeof(command)))return "invalid JSON request";
-    if(strcmp(command,"configure"))return "unsupported command";
-    if(json_string(line,n,"mac",macstr,sizeof(macstr))||parse_mac(macstr,next.mac)||
-       json_string(line,n,"host",next.host,sizeof(next.host))||json_string(line,n,"worker",next.worker,sizeof(next.worker))||
-       json_string(line,n,"password",next.password,sizeof(next.password))||json_u32(line,n,"port",&port)||port>65535)return "invalid fields";
-    next.port=(uint16_t)port;if(!settings_valid(&next))return "invalid settings";
+    miner_settings next;
     xSemaphoreTake(settings_lock,portMAX_DELAY);
-    int rc=settings_save(&next,eeprom_read,eeprom_write);
+    const char *error=miner_config_parse(line,n,&settings,&next);
+    int rc=error?-1:settings_save(&next,eeprom_read,eeprom_write);
     if(!rc){settings=next;settings_generation++;}
     xSemaphoreGive(settings_lock);
+    if(error)return error;
     if(rc)return "EEPROM write or verification failed";
     telemetry_event("settings_saved");return 0;
+}
+static int config_reply(const char *line,size_t used,int complete,char *out,size_t cap){
+    const char *error="incomplete or oversized request";char command[24];
+    if(complete){
+        if(JSON_Validate(line,used)!=JSONSuccess||json_string(line,used,"command",command,sizeof(command)))
+            error="invalid JSON request";
+        else if(!strcmp(command,"get_settings")){
+            miner_settings saved;
+            xSemaphoreTake(settings_lock,portMAX_DELAY);
+            int stored=settings_load(&saved,eeprom_read);
+            xSemaphoreGive(settings_lock);
+            if(stored<0)error="EEPROM read failed";
+            else return miner_config_json(out,cap,&saved,stored,active_mac);
+        }else error=configure(line,used);
+    }
+    return snprintf(out,cap,error?"{\"ok\":false,\"error\":\"%s\"}\n":
+        "{\"ok\":true,\"message\":\"Saved; pool reconnects, MAC applies after reboot\"}\n",error?error:"");
 }
 static void config_task(void *unused){
     (void)unused;Socket_t server=bound_socket(FREERTOS_SOCK_STREAM,4029);configASSERT(server!=FREERTOS_INVALID_SOCKET);
@@ -119,15 +158,17 @@ static void config_task(void *unused){
             if(c=='\n'){complete=1;break;}
             line[used++]=c;
         }
-        const char *error=complete?configure(line,used):"incomplete or oversized request";
-        char reply[200];int n=snprintf(reply,sizeof(reply),error?"{\"ok\":false,\"error\":\"%s\"}\n":
-            "{\"ok\":true,\"message\":\"Saved; pool reconnects, MAC applies after reboot\"}\n",error?error:"");
+        char reply[1024];int n=config_reply(line,used,complete,reply,sizeof(reply));
+        if(n<=0||(size_t)n>=sizeof(reply)){FreeRTOS_closesocket(client);continue;}
         size_t sent=0;while(sent<(size_t)n){BaseType_t k=FreeRTOS_send(client,reply+sent,n-sent,0);if(k<=0)break;sent+=(size_t)k;}
         FreeRTOS_shutdown(client,FREERTOS_SHUT_RDWR);FreeRTOS_closesocket(client);
     }
 }
 void dashboard_start(void){
-    events=xQueueCreate(32,64);configASSERT(events);
+    stats.engines=Xil_In32(MINER_ENGINES_REG);
+    stats.hw_version=Xil_In32(MINER_HW_VERSION_REG);
+    stats.bootloader_version=Xil_In32(MINER_BOOT_VERSION_REG);
+    events=xQueueCreate(32,sizeof(miner_event));configASSERT(events);
     configASSERT(xTaskCreate(broadcast_task,"telemetry",2048,0,2,0)==pdPASS);
     configASSERT(xTaskCreate(config_task,"config",3072,0,2,0)==pdPASS);
 }

@@ -1,7 +1,6 @@
 `timescale 1ns/1ps
 
-module tb_bitcoin_miner_axi;
-    localparam int unsigned NUM_ENGINES = 2;
+module tb_bitcoin_miner_axi #(parameter bit HYBRID = 0, parameter int unsigned NUM_ENGINES = 3);
     localparam int unsigned CLUSTER_SIZE = 2;
     localparam [255:0] SHA256_IV = {
         32'h6a09e667, 32'hbb67ae85, 32'h3c6ef372, 32'ha54ff53a,
@@ -47,6 +46,7 @@ module tb_bitcoin_miner_axi;
         .NUM_ENGINES(NUM_ENGINES),
         .CLUSTER_SIZE(CLUSTER_SIZE),
         .CLUSTER_FIFO_DEPTH(4),
+        .EXPLICIT_DSP_SCHEDULE(HYBRID),
         .AXI_ADDR_WIDTH(12)
     ) u_dut (
         .s_axi_aclk(clk),
@@ -203,12 +203,12 @@ module tb_bitcoin_miner_axi;
         end
     endfunction
 
-    task automatic axi_write(input [11:0] addr, input [31:0] data);
+    task automatic axi_write(input [11:0] addr, input [31:0] data, input [3:0] strb = 4'hf);
         begin
             @(negedge clk);
             awaddr = addr;
             wdata = data;
-            wstrb = 4'hf;
+            wstrb = strb;
             awvalid = 1'b1;
             wvalid = 1'b1;
             bready = 1'b1;
@@ -270,6 +270,42 @@ module tb_bitcoin_miner_axi;
         end
     endtask
 
+    // Check exact nonce coverage independently of cluster arbitration order.
+    task automatic check_batch(input [31:0] first, input integer count);
+        reg [31:0] status_word, nonce, engine, offset, before_count, after_count;
+        reg [31:0] seen;
+        integer polls;
+        begin
+            axi_write(ADDR_CONTROL, 4);
+            axi_write(ADDR_RESULT_STATUS, 3);
+            write_words256(ADDR_TARGET_BASE, {256{1'b1}});
+            axi_write(ADDR_NONCE_START, first);
+            axi_write(ADDR_NONCE_COUNT, 32'(count));
+            axi_read(12'h0ac, before_count);
+            axi_write(ADDR_CONTROL, 1);
+            seen = 0;
+            for(integer n=0; n<count; n=n+1) begin
+                status_word=0;polls=0;
+                while(!status_word[1] && polls<2400) begin
+                    axi_read(ADDR_STATUS,status_word);polls=polls+1;
+                end
+                if(polls==2400) $fatal(1,"Batch result timeout");
+                axi_read(ADDR_RESULT_NONCE,nonce);
+                axi_read(ADDR_RESULT_ENGINE,engine);
+                offset=nonce-first;
+                if(offset>=count || seen[offset]) $fatal(1,"Missing/duplicate nonce %x",nonce);
+                if(engine != offset % NUM_ENGINES) $fatal(1,"Wrong lane %d for offset %d",engine,offset);
+                seen[offset]=1;
+                axi_write(ADDR_RESULT_STATUS,1);
+            end
+            repeat(100) @(posedge clk);
+            axi_read(12'h0ac,after_count);
+            if(after_count-before_count != count) $fatal(1,"Batch count mismatch");
+            axi_read(ADDR_STATUS,status_word);
+            if(status_word[0] || status_word[1] || status_word[3]) $fatal(1,"Batch not drained/overflow");
+        end
+    endtask
+
     initial begin
         reg [511:0] header_block0;
         reg [127:0] tail;
@@ -310,6 +346,20 @@ module tb_bitcoin_miner_axi;
         end
 
         write_words256(ADDR_MIDSTATE_BASE, midstate);
+        axi_read(12'h0b0, word);
+        if(word != 32'h01000000) $fatal(1,"Hardware version incorrect");
+        axi_write(12'h0b0, 32'hffffffff);
+        axi_read(12'h0b0, word);
+        if(word != 32'h01000000) $fatal(1,"Hardware version must be read-only");
+        axi_read(12'h0b4, word);
+        if(word != 0) $fatal(1,"Boot version must reset to unknown");
+        axi_write(12'h0b4, 32'h01000000);
+        axi_read(12'h0b4, word);
+        if(word != 32'h01000000) $fatal(1,"Boot version handoff failed");
+        axi_write(12'h0b4, 32'hffffffff, 4'b0010);
+        axi_read(12'h0b4, word);
+        if(word != 32'h0100ff00) $fatal(1,"Boot version byte strobes failed");
+        axi_write(12'h0b4, 32'h01000000);
         write_words128(ADDR_TAIL_BASE, tail);
         write_words256(ADDR_TARGET_BASE, 256'hffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff);
         axi_write(ADDR_NONCE_START, 32'd0);
@@ -358,6 +408,59 @@ module tb_bitcoin_miner_axi;
             failures = failures + 1;
         end
 
+        repeat (1600) @(posedge clk);
+        axi_read(12'h0a8, word);
+        if(word != 32'h48534831) $fatal(1,"Hash counter capability missing");
+        axi_read(12'h0ac, word);
+        if(word != 4) $fatal(1,"Expected four completed hashes, got %0d",word);
+        // A zero target produces no shares but must still count every hash.
+        axi_write(ADDR_CONTROL, 4);
+        axi_write(ADDR_RESULT_STATUS, 3);
+        write_words256(ADDR_TARGET_BASE, 256'b0);
+        axi_write(ADDR_NONCE_COUNT, 5);
+        axi_write(ADDR_CONTROL, 1);
+        repeat (2600) @(posedge clk);
+        axi_read(12'h0ac, word);
+        if(word != 9) $fatal(1,"Counter must survive clear and count non-shares: %0d",word);
+        axi_read(ADDR_RESULT_STATUS, word);
+        if(word[0]) $fatal(1,"Unexpected zero-target share");
+        $display("HASH COUNTER TESTS PASSED");
+        check_batch(32'hfffffffc, 7);
+        check_batch(32'd100, 1);
+        check_batch(32'd200, 2);
+        check_batch(32'd300, 8);
+        check_batch(32'd400, 0);
+        // Exercise all divider bits without waiting for billions of hashes.
+        if(NUM_ENGINES == 3) begin
+            for(integer trial=0;trial<20;trial=trial+1) begin
+                word=(trial==0)?32'hffffffff:$urandom;
+                axi_write(ADDR_CONTROL,4);
+                axi_write(ADDR_NONCE_COUNT,word);
+                axi_write(ADDR_CONTROL,1);
+                repeat(100) @(posedge clk);
+                for(integer lane=0;lane<NUM_ENGINES;lane=lane+1)
+                    if(u_dut.engine_nonce_count_q[lane*32 +: 32] != word/3 + ((lane<word%3)?1:0))
+                        $fatal(1,"Divider mismatch count=%x lane=%d",word,lane);
+                axi_write(ADDR_CONTROL,2);
+                repeat(700) @(posedge clk);
+            end
+            axi_write(ADDR_CONTROL,4);
+            axi_write(ADDR_NONCE_COUNT,32'hffffffff);
+            axi_write(ADDR_CONTROL,1);
+            axi_write(ADDR_CONTROL,2);
+            repeat(100) @(posedge clk);
+            if(u_dut.load_state_q != 0 || u_dut.engine_busy != 0)
+                $fatal(1,"Stop during division launched an engine");
+            check_batch(32'd500, 5);
+        end
+        axi_read(12'h0b4,word);
+        if(word != 32'h01000000) $fatal(1,"Job changes cleared boot version");
+        @(negedge clk);rst_n=0;
+        repeat(4) @(negedge clk);
+        rst_n=1;
+        axi_read(12'h0b4,word);
+        if(word != 0) $fatal(1,"Reset failed to clear boot version");
+        $display("NONCE COVERAGE, WRAP, SHORT BATCH AND VERSION TESTS PASSED: lanes=%0d",NUM_ENGINES);
         if (failures == 0) begin
             $display("ALL BITCOIN MINER AXI TESTS PASSED");
             $finish;

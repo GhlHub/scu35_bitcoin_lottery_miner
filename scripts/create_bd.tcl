@@ -61,7 +61,7 @@ tie_low sysmon/vp
 tie_low sysmon/vn
 
 create_bd_cell -type module -reference bitcoin_miner_axi miner
-set_property -dict [list CONFIG.NUM_ENGINES 2 CONFIG.CLUSTER_SIZE 2 CONFIG.CLUSTER_FIFO_DEPTH 4 CONFIG.EXPLICIT_DSP_SCHEDULE 0] [get_bd_cells miner]
+set_property -dict [list CONFIG.NUM_ENGINES 3 CONFIG.CLUSTER_SIZE 2 CONFIG.CLUSTER_FIFO_DEPTH 4 CONFIG.EXPLICIT_DSP_SCHEDULE 1 CONFIG.DSP_ROUND_STATE 1] [get_bd_cells miner]
 create_bd_cell -type ip -vlnv xilinx.com:ip:axi_clock_converter:2.1 miner_clock_crossing
 set_property -dict [list CONFIG.PROTOCOL AXI4LITE CONFIG.ADDR_WIDTH 12 CONFIG.DATA_WIDTH 32 CONFIG.ACLK_ASYNC 1] [get_bd_cells miner_clock_crossing]
 
@@ -133,6 +133,7 @@ add_files -fileset constrs_1 $root/constraints/interfaces.xdc
 set_property PROCESSING_ORDER LATE [get_files $root/constraints/interfaces.xdc]
 set_property USED_IN_SYNTHESIS false [get_files $root/constraints/interfaces.xdc]
 update_compile_order -fileset sources_1
+set_property strategy Performance_ExplorePostRoutePhysOpt [get_runs impl_1]
 puts "REVIEW_READY: [get_property DIRECTORY [current_project]]/scu35_miner.xpr"
 puts "SYNTHESIS_NOT_STARTED: user block-design/reset review required."
 close_project

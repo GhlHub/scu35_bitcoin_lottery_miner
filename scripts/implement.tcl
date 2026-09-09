@@ -4,8 +4,9 @@ if {[get_property NEEDS_REFRESH [get_runs synth_1]] || [get_property PROGRESS [g
     error "Synthesis is absent or stale; run make synth first"
 }
 if {[get_property NEEDS_REFRESH [get_runs impl_1]]} {reset_run impl_1}
+set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.IS_ENABLED true [get_runs impl_1]
 if {[get_property PROGRESS [get_runs impl_1]] ne "100%"} {
-    launch_runs impl_1 -to_step route_design -jobs 4
+    launch_runs impl_1 -to_step {phys_opt_design (Post-Route)} -jobs 4
     wait_on_run impl_1
 }
 if {[get_property PROGRESS [get_runs impl_1]] ne "100%"} {error "Implementation failed"}

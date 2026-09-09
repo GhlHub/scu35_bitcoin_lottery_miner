@@ -8,5 +8,6 @@ __pycache__/
 *.log
 *.logfile
 *.pyc
+/xvlog.pb
 .env
 .env.*

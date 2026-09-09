@@ -3,7 +3,10 @@
 // SHA-256 compression wrapper specialized for the two fixed Bitcoin blocks.
 // It removes the per-engine registered 512-bit block and 256-bit state buses;
 // only the dynamic Bitcoin fields are presented to the compression core.
-module bitcoin_sha256_core (
+module bitcoin_sha256_core #(
+    parameter bit HYBRID_DSP48 = 1'b0,
+    parameter bit DSP_ROUND_STATE = 1'b1
+) (
     input  wire         clk_i,
     input  wire         rst_ni,
     input  wire         start_i,
@@ -28,8 +31,12 @@ module bitcoin_sha256_core (
         first_digest_i, 32'h80000000, 192'h0, 32'h00000100
     };
 
-    // Portable fabric path: SU35P has DSP48E2, not the VEK280's DSP58.
-    sha256_core_fabric u_core (
+    // Explicit DSP48E2 additions with LUT Boolean/rotate logic. Keep other
+    // inferred arithmetic in fabric; the baseline retains its five phases.
+    (* use_dsp = "no" *) sha256_core_iterative #(
+        .EXPLICIT_DSP_SCHEDULE(HYBRID_DSP48), .FOUR_PHASE(HYBRID_DSP48),
+        .DSP_ROUND_STATE(DSP_ROUND_STATE)
+    ) u_core (
         .clk_i(clk_i), .rst_ni(rst_ni), .start_i(start_i), .block_i(block),
         .h_i(first_pass_i ? midstate_i : SHA256_IV), .busy_o(busy_o),
         .done_o(done_o), .digest_o(digest_o)

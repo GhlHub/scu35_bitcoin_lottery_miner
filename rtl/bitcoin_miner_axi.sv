@@ -1,11 +1,12 @@
 `timescale 1ns/1ps
 
 module bitcoin_miner_axi #(
-    parameter int unsigned NUM_ENGINES = 2,
+    parameter int unsigned NUM_ENGINES = 3,
     parameter int unsigned CLUSTER_SIZE = 2,
     parameter int unsigned CLUSTER_FIFO_DEPTH = 2,
     parameter int unsigned AXI_ADDR_WIDTH = 12,
-    parameter bit EXPLICIT_DSP_SCHEDULE = 1'b0
+    parameter bit EXPLICIT_DSP_SCHEDULE = 1'b0,
+    parameter bit DSP_ROUND_STATE = 1'b1
 ) (
     (* X_INTERFACE_INFO = "xilinx.com:signal:clock:1.0 s_axi_aclk CLK",
        X_INTERFACE_PARAMETER = "ASSOCIATED_BUSIF S_AXI, ASSOCIATED_RESET s_axi_aresetn" *)
@@ -66,10 +67,19 @@ module bitcoin_miner_axi #(
     localparam [11:0] ADDR_IRQ_CONTROL   = 12'h0a0;
     localparam int unsigned NUM_CLUSTERS = (NUM_ENGINES + CLUSTER_SIZE - 1) / CLUSTER_SIZE;
     localparam int unsigned ENGINE_INDEX_WIDTH = (NUM_ENGINES <= 1) ? 1 : $clog2(NUM_ENGINES);
-    localparam [1:0] LOAD_IDLE   = 2'd0;
-    localparam [1:0] LOAD_PREP   = 2'd1;
-    localparam [1:0] LOAD_DECODE = 2'd2;
-    localparam [1:0] LOAD_START  = 2'd3;
+    localparam [2:0] LOAD_IDLE   = 3'd0;
+    localparam [2:0] LOAD_PREP   = 3'd1;
+    localparam [2:0] LOAD_DECODE = 3'd2;
+    localparam [2:0] LOAD_START  = 3'd3;
+    localparam [2:0] LOAD_DIVIDE = 3'd4;
+
+    // Three lanes need divide-by-three only once per job, not a large
+    // combinational divider in the 200 MHz launch path. Restoring division
+    // takes 32 cycles; each lane then gets quotient + (index < remainder).
+    reg [31:0] load_div_q;
+    reg [1:0] load_rem_q;
+    reg [5:0] load_div_bits_q;
+    wire [2:0] load_rem_shift = {load_rem_q, load_div_q[31]};
 
     reg [255:0] midstate_q;
     reg [127:0] header_tail_q;
@@ -84,6 +94,10 @@ module bitcoin_miner_axi #(
     reg         irq_force_q;
     reg [31:0]  result_nonce_q;
     reg [31:0]  result_engine_q;
+    // Semantic version: major[31:24], minor[23:16], patch[15:0].
+    localparam [31:0] HW_VERSION = 32'h01000000; // 1.0.0
+    reg [31:0] boot_version_q;
+    reg wr_stage2_boot_version_we_q;
 
     reg start_pulse_q;
     reg stop_pulse_q;
@@ -92,7 +106,7 @@ module bitcoin_miner_axi #(
     reg [NUM_ENGINES-1:0]    engine_stop_q;
     reg [NUM_ENGINES*32-1:0] engine_nonce_start_q;
     reg [NUM_ENGINES*32-1:0] engine_nonce_count_q;
-    reg [1:0] load_state_q;
+    reg [2:0] load_state_q;
     reg [ENGINE_INDEX_WIDTH-1:0] load_engine_idx_q;
     reg [ENGINE_INDEX_WIDTH-1:0] load_start_idx_q;
     reg [31:0] load_start_count_q;
@@ -120,6 +134,19 @@ module bitcoin_miner_axi #(
 
     wire [NUM_ENGINES-1:0] engine_busy;
     wire [NUM_ENGINES-1:0] engine_done;
+    wire [NUM_ENGINES-1:0] engine_hash_complete;
+    reg [31:0] hash_count_q;
+    reg [$clog2(NUM_ENGINES+1)-1:0] hashes_this_cycle;
+    always @* begin
+        hashes_this_cycle = 0;
+        for (integer h=0; h<NUM_ENGINES; h=h+1)
+            hashes_this_cycle = hashes_this_cycle + engine_hash_complete[h];
+    end
+    // Free-running modulo-2^32 count. Job start/stop/FIFO clear never reset it.
+    always @(posedge s_axi_aclk or negedge s_axi_aresetn) begin
+        if (!s_axi_aresetn) hash_count_q <= 0;
+        else hash_count_q <= hash_count_q + hashes_this_cycle;
+    end
     wire [NUM_ENGINES-1:0] engine_result_valid;
     wire [NUM_ENGINES*32-1:0] engine_result_nonce;
     wire [NUM_CLUSTERS-1:0] cluster_valid;
@@ -180,6 +207,10 @@ module bitcoin_miner_axi #(
                     ADDR_RESULT_ENGINE: read_reg = result_engine_q;
                     ADDR_RESULT_STATUS: read_reg = {30'h0, overflow_q, result_valid_q};
                     ADDR_IRQ_CONTROL:   read_reg = {30'h0, irq_force_q, irq_mask_q};
+                    12'h0a8:            read_reg = 32'h48534831; // "HSH1" capability
+                    12'h0ac:            read_reg = hash_count_q;
+                    12'h0b0:            read_reg = HW_VERSION;
+                    12'h0b4:            read_reg = boot_version_q;
                     default:            read_reg = 32'h00000000;
                 endcase
             end
@@ -211,12 +242,23 @@ module bitcoin_miner_axi #(
         end
     endfunction
 
+    wire [31:0] load_lane_count;
+    generate
+        if (NUM_ENGINES == 3) begin : g_three_lane_count
+            assign load_lane_count = load_div_q + {31'b0, (load_engine_idx_q < load_rem_q)};
+        end else begin : g_other_lane_count
+            assign load_lane_count = engine_work_count(nonce_count_q,
+                {{(32-ENGINE_INDEX_WIDTH){1'b0}}, load_engine_idx_q});
+        end
+    endgenerate
+
     genvar gen_idx;
     generate
         for (gen_idx = 0; gen_idx < NUM_ENGINES; gen_idx = gen_idx + 1) begin : g_engines
             bitcoin_hash_engine #(
                 .NONCE_STRIDE(NUM_ENGINES),
-                .EXPLICIT_DSP_SCHEDULE(EXPLICIT_DSP_SCHEDULE)
+                .EXPLICIT_DSP_SCHEDULE(EXPLICIT_DSP_SCHEDULE),
+                .DSP_ROUND_STATE(DSP_ROUND_STATE)
             ) u_engine (
                 .clk_i(s_axi_aclk),
                 .rst_ni(s_axi_aresetn),
@@ -229,6 +271,7 @@ module bitcoin_miner_axi #(
                 .nonce_count_i(engine_nonce_count_q[gen_idx*32 +: 32]),
                 .busy_o(engine_busy[gen_idx]),
                 .done_o(engine_done[gen_idx]),
+                .hash_complete_o(engine_hash_complete[gen_idx]),
                 .result_valid_o(engine_result_valid[gen_idx]),
                 .result_nonce_o(engine_result_nonce[gen_idx*32 +: 32])
             );
@@ -299,6 +342,11 @@ module bitcoin_miner_axi #(
             header_tail_q <= 128'h0;
             target_q <= 256'hffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff;
             nonce_start_q <= 32'h0;
+            boot_version_q <= 32'h0;
+            load_div_q <= 0;
+            load_rem_q <= 0;
+            load_div_bits_q <= 0;
+            wr_stage2_boot_version_we_q <= 1'b0;
             nonce_count_q <= 32'h0;
             running_q <= 1'b0;
             nonce_done_q <= 1'b0;
@@ -378,6 +426,7 @@ module bitcoin_miner_axi #(
                 wr_stage2_nonce_count_we_q <= 1'b0;
                 wr_stage2_result_status_we_q <= 1'b0;
                 wr_stage2_irq_control_we_q <= 1'b0;
+                wr_stage2_boot_version_we_q <= 1'b0;
                 wr_stage1_valid_q <= 1'b0;
 
                 if ((wr_addr >= ADDR_MIDSTATE_BASE) && (wr_addr < ADDR_MIDSTATE_BASE + 12'h020)) begin
@@ -391,6 +440,7 @@ module bitcoin_miner_axi #(
                     wr_stage2_target_we_q[i] <= 1'b1;
                 end else begin
                     case (wr_addr)
+                        12'h0b4: wr_stage2_boot_version_we_q <= 1'b1;
                         ADDR_CONTROL: begin
                             wr_stage2_control_we_q <= 1'b1;
                         end
@@ -431,6 +481,8 @@ module bitcoin_miner_axi #(
             end
 
             if (write_apply) begin
+                if (wr_stage2_boot_version_we_q)
+                    boot_version_q <= apply_wstrb(boot_version_q, wr_stage2_data_q, wr_stage2_strb_q);
                 s_axi_bresp <= 2'b00;
                 s_axi_bvalid <= 1'b1;
                 wr_stage2_valid_q <= 1'b0;
@@ -457,7 +509,10 @@ module bitcoin_miner_axi #(
                         nonce_done_q <= 1'b0;
                         overflow_q <= 1'b0;
                         result_valid_q <= 1'b0;
-                        load_state_q <= LOAD_PREP;
+                        load_state_q <= (NUM_ENGINES == 3) ? LOAD_DIVIDE : LOAD_PREP;
+                        load_div_q <= nonce_count_q;
+                        load_rem_q <= 0;
+                        load_div_bits_q <= 32;
                         load_engine_idx_q <= {ENGINE_INDEX_WIDTH{1'b0}};
                     end
                     if (wr_stage2_data_q[1]) begin
@@ -495,22 +550,29 @@ module bitcoin_miner_axi #(
                 end
             end
 
-            case (load_state_q)
+            // STOP takes precedence even while the launch divider is busy.
+            if (!(write_apply && wr_stage2_control_we_q && wr_stage2_data_q[1])) case (load_state_q)
                 LOAD_IDLE: begin
+                end
+
+                LOAD_DIVIDE: begin
+                    if (load_rem_shift >= 3) begin
+                        load_rem_q <= 2'(load_rem_shift - 3'd3);
+                        load_div_q <= {load_div_q[30:0], 1'b1};
+                    end else begin
+                        load_rem_q <= load_rem_shift[1:0];
+                        load_div_q <= {load_div_q[30:0], 1'b0};
+                    end
+                    load_div_bits_q <= load_div_bits_q - 1'b1;
+                    if (load_div_bits_q == 1) load_state_q <= LOAD_PREP;
                 end
 
                 LOAD_PREP: begin
                     load_start_idx_q <= load_engine_idx_q;
-                    load_start_count_q <= engine_work_count(
-                        nonce_count_q,
-                        {{(32-ENGINE_INDEX_WIDTH){1'b0}}, load_engine_idx_q}
-                    );
+                    load_start_count_q <= load_lane_count;
                     load_start_last_q <= (load_engine_idx_q == NUM_ENGINES[ENGINE_INDEX_WIDTH-1:0] - {{(ENGINE_INDEX_WIDTH-1){1'b0}}, 1'b1});
                     engine_nonce_start_q[load_engine_idx_q*32 +: 32] <= nonce_start_q + {{(32-ENGINE_INDEX_WIDTH){1'b0}}, load_engine_idx_q};
-                    engine_nonce_count_q[load_engine_idx_q*32 +: 32] <= engine_work_count(
-                        nonce_count_q,
-                        {{(32-ENGINE_INDEX_WIDTH){1'b0}}, load_engine_idx_q}
-                    );
+                    engine_nonce_count_q[load_engine_idx_q*32 +: 32] <= load_lane_count;
                     load_state_q <= LOAD_DECODE;
                 end
 

@@ -7,6 +7,7 @@
 #include "mb_interface.h"
 #include "hyperbus_odly.h"
 #include "srec.h"
+#include "versions.h"
 
 #define HB 0x00010000U
 #define SPI 0x44A00000U
@@ -104,7 +105,8 @@ int main(void)
     static const uint8_t offsets[]={0,8,16,32};
     microblaze_disable_interrupts();
     Xil_ICacheDisable();Xil_DCacheDisable();console_init();
-    xil_printf("SCU35 50MHz SREC boot\r\n");
+    xil_printf("SCU35 50MHz SREC boot v" BOOTLOADER_VERSION "\r\n");
+    Xil_Out32(MINER_BOOT_VERSION_REG,BOOTLOADER_VERSION_CODE);
     delay(50000); /* power-on guard before the first HyperRAM command */
     if(hb_idelayctrl_reset_wait_ready(HB,0x8000)) goto fail;
     uint32_t reset=Xil_In32(HB+HB_DELAY_RST_CTRL_OFFSET);

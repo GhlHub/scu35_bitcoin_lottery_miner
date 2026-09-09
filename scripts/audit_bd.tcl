@@ -19,7 +19,20 @@ foreach cell [get_bd_cells -hier -filter {VLNV =~ *:proc_sys_reset:*}] {
     same_net $cell/mb_debug_sys_rst mdm_0/Debug_SYS_Rst
     puts "RESET_AUDIT $cell external=active-low auxiliary=inactive-high debug=MDM"
 }
+same_net clk_wiz_0/clk_out1 hyperbus_controller_0/i_hb_clk_200
+same_net clk_wiz_0/clk_out2 hyperbus_controller_0/i_hb_clk_200_samp_90
 same_net clk_wiz_0/clk_out1 miner/s_axi_aclk
+same_net clk_wiz_0/clk_out1 miner_clock_crossing/m_axi_aclk
+same_net clk_wiz_0/clk_out3 miner_clock_crossing/s_axi_aclk
+same_net reset_gen/hb_clk_peripheral_aresetn miner/s_axi_aresetn
+same_net reset_gen/hb_clk_peripheral_aresetn miner_clock_crossing/m_axi_aresetn
+same_net reset_gen/axi_clk_peripheral_aresetn miner_clock_crossing/s_axi_aresetn
+foreach name {hash_clk_wiz hash_reset_210 hash_reset_50} {
+    require {[llength [get_bd_cells -quiet $name]] == 0} "Withdrawn 210 MHz component $name must be absent"
+}
+foreach {pin hz} {clk_wiz_0/clk_out1 200000000 clk_wiz_0/clk_out2 200000000 clk_wiz_0/clk_out4 300000000 clk_wiz_0/clk_out5 200000000 miner/s_axi_aclk 200000000 miner_clock_crossing/m_axi_aclk 200000000 miner_clock_crossing/s_axi_aclk 50000000} {
+    require {[get_property CONFIG.FREQ_HZ [get_bd_pins $pin]] == $hz} "$pin frequency must be $hz"
+}
 require {[get_property CONFIG.CLKOUT2_REQUESTED_PHASE [get_bd_cells clk_wiz_0]] == 90} "HyperRAM receive clock must retain its 90 degree phase"
 same_net clk_wiz_0/clk_out3 microblaze_0/Clk
 require {[get_property CONFIG.FREQ_HZ [get_bd_pins microblaze_0/Clk]] == 50000000} "MicroBlaze must run at exactly 50 MHz"
@@ -28,7 +41,8 @@ same_net hyperbus_controller_0/o_hb_clk_ce clk_wiz_0/clk_out5_ce
 same_net miner/irq_o miner_irq_sync/async_irq
 same_net miner_irq_sync/irq ilconcat_0/In6
 require {[get_property CONFIG.ACLK_ASYNC [get_bd_cells miner_clock_crossing]] == 1} "AXI CDC mode"
-require {[get_property CONFIG.NUM_ENGINES [get_bd_cells miner]] == 2} "Engine count"
+require {[get_property CONFIG.NUM_ENGINES [get_bd_cells miner]] == 3} "Engine count"
+puts "MINER_HYBRID_DSP48 [get_property CONFIG.EXPLICIT_DSP_SCHEDULE [get_bd_cells miner]]"
 require {[get_property CONFIG.C_KIND_OF_INTR [get_bd_cells axi_intc_0]] == 12} "IRQ modes must match source interfaces (miner level-high)"
 # Confirm physical AXI decode, not only the address-editor view. Imported
 # user-valued crossbar parameters otherwise leave new peripherals unreachable.

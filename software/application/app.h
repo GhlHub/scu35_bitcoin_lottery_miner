@@ -2,6 +2,7 @@
 #ifndef APP_H
 #define APP_H
 #include "settings.h"
+#include "miner_protocol.h"
 #include "FreeRTOS.h"
 #include "semphr.h"
 extern miner_settings settings;
@@ -15,4 +16,7 @@ void console_init(void);
 void dashboard_start(void);
 void stratum_start(void);
 void telemetry_event(const char *event);
+void telemetry_detail(const miner_event *event);
+uint32_t telemetry_job(const char *job_id);
+void telemetry_mining(int active);
 #endif
