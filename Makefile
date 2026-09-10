@@ -20,6 +20,9 @@ package:
 	$(VIVADO) -mode batch -source scripts/flash_mcs.tcl -log logs/flash_mcs.log -journal logs/flash_mcs.jou
 	python3 scripts/verify_mcs.py
 test: sim
+	gcc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Isoftware/common tb/test_ina700.c software/common/ina700.c -o build/test_ina700
+	build/test_ina700
+	bash tb/test_power_iic.sh
 	iverilog -g2012 -s tb_hyperbus_wready_probe -o build/sim/hyperbus_wready_probe third_party/hyperbus_controller/rtl/hyperbus_axi_full_frontend.sv tb/tb_hyperbus_wready_probe.sv
 	vvp build/sim/hyperbus_wready_probe
 	gcc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Isoftware/common tb/test_settings.c software/common/settings.c software/common/srec.c -o build/test_settings

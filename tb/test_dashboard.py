@@ -13,8 +13,39 @@ spec.loader.exec_module(dashboard)
 
 
 class DashboardTests(unittest.TestCase):
+    def test_partial_event(self):
+        previous = dict(uptime_ms=1000, power={"source": "INA700"}, hashrate_hps=1138500)
+        event = dict(partial=True, uptime_ms=1100, event="solution_submitted")
+        merged = dashboard.merge_telemetry(previous, event)
+        self.assertEqual(merged["power"], previous["power"])
+        self.assertEqual(merged["hashrate_hps"], 1138500)
+        reboot = dict(partial=True, uptime_ms=5, event="pool_connected")
+        self.assertNotIn("power", dashboard.merge_telemetry(previous, reboot))
+
+    def test_power(self):
+        rail = dict(valid=True, voltage_uv=5000000, current_ua=1200000, power_uw=6000000,
+                    temp_milli_c=30000, age_ms=100, errors=0)
+        missing = dict(valid=False, voltage_uv=None, current_ua=None, power_uw=None,
+                       temp_milli_c=None, age_ms=None, errors=2)
+        packet = dict(hashrate_hps=1138500, power=dict(source="INA700", internal_5v=rail, vccint=missing))
+        dashboard.validate_power(packet)
+        text = dashboard.format_power(packet)
+        for expected in ("6.000 W", "5.000 V", "1.200 A", "VCCINT core: unavailable", "0.190 MH/s/W", "read errors 2"):
+            self.assertIn(expected, text)
+        dashboard.validate_power({})
+        self.assertIn("unavailable", dashboard.format_power({}))
+        for field, bad in (("power_uw", -1), ("current_ua", True), ("voltage_uv", "5"), ("age_ms", 3001), ("valid", 1)):
+            malformed = dict(packet, power=dict(packet["power"], internal_5v=dict(rail, **{field: bad})))
+            with self.assertRaises(ValueError):
+                dashboard.validate_power(malformed)
+        zero = dict(packet, power=dict(packet["power"], internal_5v=dict(rail, power_uw=0)))
+        self.assertNotIn("efficiency", dashboard.format_power(zero))
+        stale = dict(packet, power_seen=dashboard.time.monotonic()-4)
+        self.assertIn("Internal 5 V: unavailable", dashboard.format_power(stale))
+        self.assertNotIn("efficiency", dashboard.format_power(stale))
+
     def test_versions(self):
-        self.assertEqual(dashboard.DASHBOARD_VERSION, "1.0.0")
+        self.assertEqual(dashboard.DASHBOARD_VERSION, "1.1.0")
         self.assertEqual(dashboard.format_versions(dict(engines=3, hw_version="1.0.0",
             bootloader_version="1.2.3", application_version="2.0.1")),
             "Lanes 3 | HW 1.0.0 | Boot 1.2.3 | App 2.0.1")

@@ -19,4 +19,6 @@ void telemetry_event(const char *event);
 void telemetry_detail(const miner_event *event);
 uint32_t telemetry_job(const char *job_id);
 void telemetry_mining(int active);
+void power_start(void);
+void telemetry_power(const ina700_sample samples[2]);
 #endif

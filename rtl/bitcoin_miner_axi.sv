@@ -95,7 +95,7 @@ module bitcoin_miner_axi #(
     reg [31:0]  result_nonce_q;
     reg [31:0]  result_engine_q;
     // Semantic version: major[31:24], minor[23:16], patch[15:0].
-    localparam [31:0] HW_VERSION = 32'h01000000; // 1.0.0
+    localparam [31:0] HW_VERSION = 32'h01020000; // 1.2.0: INA700 I2C controller
     reg [31:0] boot_version_q;
     reg wr_stage2_boot_version_we_q;
 

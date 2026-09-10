@@ -49,10 +49,32 @@ static void version_json(char *out,size_t cap,uint32_t version){
     else snprintf(out,cap,"\"%u.%u.%u\"",(unsigned)(version>>24),
         (unsigned)((version>>16)&255U),(unsigned)(version&65535U));
 }
+int miner_event_json(char *out,size_t cap,const miner_event *e,uint32_t seq,uint32_t event_seq,uint32_t uptime,int centi,const uint8_t *mac){
+    return snprintf(out,cap,
+        "{\"protocol\":\"SCU35/1\",\"partial\":true,\"seq\":%lu,\"event_seq\":%lu,\"event\":\"%s\","
+        "\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"uptime_ms\":%lu,\"temp_centi\":%d,"
+        "\"details\":{\"job_number\":%lu,\"job_id\":\"%s\",\"submission\":%s,\"hash\":\"%s\"}}",
+        (unsigned long)seq,(unsigned long)event_seq,e->name,
+        mac[0],mac[1],mac[2],mac[3],mac[4],mac[5],(unsigned long)uptime,centi,
+        (unsigned long)e->job_number,e->job_id,e->submission[0]?e->submission:"null",e->hash);
+}
+static void power_json(char *out,size_t cap,const ina700_sample *s,uint32_t now){
+    uint32_t age=now-s->sampled_ms;
+    if(!s->valid||age>3000U){
+        snprintf(out,cap,"{\"valid\":false,\"voltage_uv\":null,\"current_ua\":null,\"power_uw\":null,\"temp_milli_c\":null,\"age_ms\":null,\"errors\":%lu}",(unsigned long)s->errors);
+    }else{
+        snprintf(out,cap,"{\"valid\":true,\"voltage_uv\":%lu,\"current_ua\":%ld,\"power_uw\":%lu,\"temp_milli_c\":%ld,\"age_ms\":%lu,\"errors\":%lu}",
+            (unsigned long)s->voltage_uv,(long)s->current_ua,(unsigned long)s->power_uw,
+            (long)s->temp_milli_c,(unsigned long)age,(unsigned long)s->errors);
+    }
+}
 int miner_telemetry_json(char *out,size_t cap,const miner_stats *s,const miner_event *e,
                        uint32_t seq,uint32_t event_seq,uint32_t uptime,int centi,const uint8_t *mac,int network,int phy){
     char rate[24];
     char hw[24],boot[24];
+    char power5[256],core[256];
+    power_json(power5,sizeof(power5),&s->power[0],uptime);
+    power_json(core,sizeof(core),&s->power[1],uptime);
     version_json(hw,sizeof(hw),s->hw_version);
     version_json(boot,sizeof(boot),s->bootloader_version);
     if(s->hashrate_valid)snprintf(rate,sizeof(rate),"%lu",(unsigned long)s->hashrate_hps);else strcpy(rate,"null");
@@ -65,6 +87,7 @@ int miner_telemetry_json(char *out,size_t cap,const miner_stats *s,const miner_e
         "\"job_number\":%lu,\"job_id\":\"%s\",\"shares_submitted\":%lu,\"shares_accepted\":%lu,\"shares_rejected\":%lu,"
         "\"hardware_errors\":%lu,\"events_dropped\":%lu,\"hashrate_hps\":%s,\"hashrate_source\":\"hardware_counter\","
         "\"hashrate_sample_ms\":%lu,\"hashes_total\":%llu,"
+        "\"power\":{\"source\":\"INA700\",\"internal_5v\":%s,\"vccint\":%s},"
         "\"details\":{\"job_number\":%lu,\"job_id\":\"%s\",\"submission\":%s,\"hash\":\"%s\"}}",
         (unsigned long)seq,(unsigned long)event_seq,e->name,
         mac[0],mac[1],mac[2],mac[3],mac[4],mac[5],(unsigned long)uptime,centi,
@@ -72,5 +95,5 @@ int miner_telemetry_json(char *out,size_t cap,const miner_stats *s,const miner_e
         s->connected?"true":"false",s->authorized?"true":"false",s->mining?"true":"false",
         (unsigned long)s->jobs,s->job_id,(unsigned long)s->submitted,(unsigned long)s->accepted,(unsigned long)s->rejected,
         (unsigned long)s->invalid,(unsigned long)s->dropped,rate,(unsigned long)s->sample_ms,(unsigned long long)s->hashes_total,
-        (unsigned long)e->job_number,e->job_id,e->submission[0]?e->submission:"null",e->hash);
+        power5,core,(unsigned long)e->job_number,e->job_id,e->submission[0]?e->submission:"null",e->hash);
 }

@@ -121,6 +121,7 @@ foreach {slot address bits} {05 0x40E00000 16 06 0x40800000 16 07 0x44A20000 16 
     set_property CONFIG.M${slot}_A00_BASE_ADDR $address [get_bd_cells axi_crossbar_0]
     set_property CONFIG.M${slot}_A00_ADDR_WIDTH $bits [get_bd_cells axi_crossbar_0]
 }
+source $root/scripts/power_iic_bd.tcl
 validate_bd_design
 source $root/scripts/audit_bd.tcl
 save_bd_design

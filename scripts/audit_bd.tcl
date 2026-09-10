@@ -19,6 +19,11 @@ foreach cell [get_bd_cells -hier -filter {VLNV =~ *:proc_sys_reset:*}] {
     same_net $cell/mb_debug_sys_rst mdm_0/Debug_SYS_Rst
     puts "RESET_AUDIT $cell external=active-low auxiliary=inactive-high debug=MDM"
 }
+same_net clk_wiz_0/clk_out3 power_iic/s_axi_aclk
+same_net reset_gen/axi_clk_peripheral_aresetn power_iic/s_axi_aresetn
+same_net power_iic/iic2intc_irpt ilconcat_0/In7
+require {[get_property CONFIG.NUM_MI [get_bd_cells axi_crossbar_0]] == 10} "Ten AXI crossbar outputs required"
+require {[get_property OFFSET [get_bd_addr_segs microblaze_0/Data/SEG_power_iic_Reg]] == 0x40810000} "Power IIC address"
 same_net clk_wiz_0/clk_out1 hyperbus_controller_0/i_hb_clk_200
 same_net clk_wiz_0/clk_out2 hyperbus_controller_0/i_hb_clk_200_samp_90
 same_net clk_wiz_0/clk_out1 miner/s_axi_aclk
@@ -46,7 +51,7 @@ puts "MINER_HYBRID_DSP48 [get_property CONFIG.EXPLICIT_DSP_SCHEDULE [get_bd_cell
 require {[get_property CONFIG.C_KIND_OF_INTR [get_bd_cells axi_intc_0]] == 12} "IRQ modes must match source interfaces (miner level-high)"
 # Confirm physical AXI decode, not only the address-editor view. Imported
 # user-valued crossbar parameters otherwise leave new peripherals unreachable.
-foreach {slot address bits} {05 0x40E00000 16 06 0x40800000 16 07 0x44A20000 16 08 0x44A30000 12} {
+foreach {slot address bits} {05 0x40E00000 16 06 0x40800000 16 07 0x44A20000 16 08 0x44A30000 12 09 0x40810000 16} {
     set actual [get_property CONFIG.M${slot}_A00_BASE_ADDR [get_bd_cells axi_crossbar_0]]
     if {$actual != $address} {error "Crossbar M$slot base is $actual, expected $address"}
     if {[get_property CONFIG.M${slot}_A00_ADDR_WIDTH [get_bd_cells axi_crossbar_0]] != $bits} {

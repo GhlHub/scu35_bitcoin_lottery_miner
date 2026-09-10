@@ -84,6 +84,7 @@ Hardware timing/CDC reports still require the post-review implementation.
 | HyperBus control | 0x00010000 | 64 KiB | — |
 | PMC bridge | Fixed 0x040xxxxx / 0x041xxxxx windows | Per hardware map | — |
 | EEPROM IIC | 0x40800000 | 64 KiB | 4, level-high |
+| INA700 power IIC (HW 1.2.0) | 0x40810000 | 64 KiB | 7, level-high; firmware polls |
 | EthernetLite | 0x40E00000 | 64 KiB | 3, rising edge |
 | AXI interrupt controller | 0x41200000 | 64 KiB | To MicroBlaze |
 | FreeRTOS AXI timer | 0x41C00000 | 64 KiB | 1, level-high |

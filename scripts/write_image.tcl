@@ -13,7 +13,7 @@ if {[get_property SLACK $setup] < 0 || [get_property SLACK $hold] < 0} {
     error "Timing is not closed; refusing image generation"
 }
 # These must be real receive nets, not unused pads from disabled AXI windows.
-foreach buffer {IIC_0_scl_iobuf IIC_0_sda_iobuf MDIO_0_mdio_iobuf} {
+foreach buffer {IIC_0_scl_iobuf IIC_0_sda_iobuf POWER_IIC_scl_iobuf POWER_IIC_sda_iobuf MDIO_0_mdio_iobuf} {
     set loads [get_pins -leaf -of_objects [get_nets -segments -of_objects [get_pins $buffer/O]] -filter {DIRECTION == IN}]
     if {![llength $loads]} {error "No receive logic on $buffer"}
 }

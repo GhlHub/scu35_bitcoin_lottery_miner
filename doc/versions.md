@@ -6,10 +6,15 @@ unversioned. Bump the affected component for subsequent changes: major for
 incompatible interfaces, minor for compatible features, patch for fixes.
 Versions are manually maintained, not automatically incremented by rebuilds.
 
-Current hardware is restored to **1.0.0**, with hashing and HyperBus sharing
+The deployed hardware is **1.2.0**, adding a dedicated INA700 I2C controller.
+Application and dashboard are **1.1.0** for power telemetry; bootloader remains
+**1.0.0**. This build was flashed and boot-checked on 2026-09-10.
+See [power telemetry](power_telemetry.md).
+
+The preceding deployed hardware was restored to **1.0.0**, with hashing and HyperBus sharing
 200 MHz. The experimental [hardware 1.1.0 / 210 MHz build](hash210_build.md)
 was withdrawn at the user's request before deployment. Bootloader,
-application, and dashboard remain at **1.0.0**. This restores the earlier
+application, and dashboard remained at **1.0.0** for that restoration. It restored the earlier
 configuration rather than introducing a new hardware release.
 
 | Component | Source of truth | Where visible |
@@ -49,4 +54,4 @@ over the launch state machine, including while division is in progress.
 The regression checks hardware version immutability, boot register reset,
 write/readback, byte strobes, persistence across jobs, JSON version formatting,
 unknown-version handling, and dashboard display. These versions describe the
-new build, not the currently running two-lane board until it is updated.
+selected build; the board now runs three-lane hardware 1.2.0 with power telemetry.

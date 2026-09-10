@@ -7,6 +7,9 @@ set_property -dict {PACKAGE_PIN AC6 IOSTANDARD LVCMOS33} [get_ports {UART_0_rxd}
 set_property -dict {PACKAGE_PIN AB6 IOSTANDARD LVCMOS33} [get_ports {UART_0_txd}]
 set_property -dict {PACKAGE_PIN L1 IOSTANDARD LVCMOS33} [get_ports {IIC_0_scl_io}]
 set_property -dict {PACKAGE_PIN K1 IOSTANDARD LVCMOS33} [get_ports {IIC_0_sda_io}]
+# SCU35 schematic A4 sheet 9: dedicated INA700 bus, external 4.7k pull-ups.
+set_property -dict {PACKAGE_PIN M4 IOSTANDARD LVCMOS33} [get_ports {POWER_IIC_scl_io}]
+set_property -dict {PACKAGE_PIN L4 IOSTANDARD LVCMOS33} [get_ports {POWER_IIC_sda_io}]
 set_property -dict {PACKAGE_PIN AB9 IOSTANDARD LVCMOS33} [get_ports {MDIO_0_mdc}]
 set_property -dict {PACKAGE_PIN AA9 IOSTANDARD LVCMOS33} [get_ports {MDIO_0_mdio_io}]
 set_property -dict {PACKAGE_PIN AE9 IOSTANDARD LVCMOS33} [get_ports {phy_reset_n}]

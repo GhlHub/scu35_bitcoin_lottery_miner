@@ -16,7 +16,18 @@ and zero reported hardware errors. The wallet is redacted.
 
 ## Build status
 
-The current **three-lane, hardware 1.0.0** configuration has been restored:
+The deployed build includes **INA700 power telemetry**: hardware **1.2.0**,
+application/dashboard **1.1.0**, bootloader **1.0.0**. A dedicated I2C controller
+reads internal 5 V and VCCINT voltage, current and power; the dashboard displays
+both rails and 5 V mining efficiency. Hash/HyperBus stay at 200 MHz and CPU at
+50 MHz. Routed WNS is +0.017 ns, with 13,644 LUTs and 33 DSPs. This update has
+been **flashed and readback-verified on 2026-09-10**. Network telemetry confirmed
+mining at approximately 1.139 MH/s and valid readings from both INA700s.
+See [power telemetry and build details](doc/power_telemetry.md).
+
+The following describes the preceding deployed build.
+
+The preceding **three-lane, hardware 1.0.0** configuration was restored:
 hashing and HyperBus share **200 MHz**, and MicroBlaze remains at **50 MHz**.
 Expected throughput is **1.139 MH/s** before job-change overhead.
 The 210 MHz experiment was withdrawn at the user's request.
@@ -142,9 +153,13 @@ The enhanced dashboard shows measured device hashrate, job number/pool ID,
 submitted/accepted/rejected share counts, completed hashes, and error counters.
 Share events show the exact `mining.submit` JSON and corresponding Bitcoin hash.
 This exposes the wallet/worker to trusted-LAN subscribers, never the password.
-The enhanced firmware and hardware counter are now deployed together; old
-firmware cannot provide settings readback or measured hashrate. See
-[enhanced telemetry validation](doc/telemetry.md) for the current deployment status.
+Dashboard 1.1.0 additionally displays internal 5 V and VCCINT power, voltage,
+current, sensor temperature, sample age, and read errors. Samples older than
+three seconds are unavailable. Mining efficiency uses internal 5 V power,
+not wall-plug power; the two rail readings must not be added together.
+Restart the dashboard after updating its source to see these fields.
+See [power telemetry validation](doc/power_telemetry.md) for current deployment
+status and [earlier telemetry validation](doc/telemetry.md) for history.
 
 Assign a unique MAC to every board: unconfigured boards use `02:00:00:11:22:33`.
 Settings use two CRC-protected EEPROM slots at `0x1000` and `0x1200`; the first

@@ -1,7 +1,24 @@
 # Validation and board bring-up
 
-For the subsequent local hybrid variant, see [hybrid validation](hybrid_dsp48.md).
-The physical board tests below apply to the fabric implementation.
+## Current deployment: power telemetry, 2026-09-10
+
+Hardware 1.2.0, application/dashboard 1.1.0, bootloader 1.0.0 are the current
+power-telemetry release. QSPI erase, blank check, programming and read-back
+verification passed on SCU35 cable `52041A454A5TA`; the FPGA then booted from
+flash. Network telemetry confirmed three lanes, CPU 50 MHz, pool authorization,
+and approximately 1.139 MH/s. Both INA700 monitors reported valid data with
+zero read errors: about 0.60 W internal 5 V and 0.20 W VCCINT while mining.
+These rail powers are not additive and are not wall-plug measurements.
+
+The initial observation reported no miner hardware errors. The UART bridge
+was unavailable; application/version/power verification used UDP telemetry.
+This is a deployment smoke test, not a long-duration stability or independent
+power-calibration test. No EEPROM settings were changed.
+
+See [power telemetry](power_telemetry.md) for circuitry, register conversions,
+tests, timing/utilization, image hashes, logs and rebuild instructions.
+The sections below retain historical fabric bring-up results; see also
+[hybrid validation](hybrid_dsp48.md) for earlier hybrid revisions.
 
 ## Fabric implementation completed on 2026-09-09
 

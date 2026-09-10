@@ -19,6 +19,9 @@
 static QueueHandle_t events;
 static uint32_t event_seq;
 static miner_stats stats;
+void telemetry_power(const ina700_sample samples[2]){
+    taskENTER_CRITICAL();memcpy(stats.power,samples,sizeof(stats.power));taskEXIT_CRITICAL();
+}
 extern int ethernet_phy_known(void);
 void telemetry_detail(const miner_event *event){
     taskENTER_CRITICAL();
@@ -64,7 +67,7 @@ static void broadcast_task(void *unused){
     (void)unused;
     struct {struct freertos_sockaddr peer;TickType_t last;int used;} clients[4]={0};
     Socket_t s=bound_socket(FREERTOS_SOCK_DGRAM,4028);configASSERT(s!=FREERTOS_INVALID_SOCKET);
-    char request[80],message[2048];miner_event event;uint32_t seq=0;TickType_t last_status=0;
+    char request[80],message[MINER_TELEMETRY_MAX];miner_event event;uint32_t seq=0;TickType_t last_status=0;
     TickType_t sampled=xTaskGetTickCount();
     int counter_present=Xil_In32(0x44a300a8U)==0x48534831U;
     uint32_t previous=counter_present?Xil_In32(0x44a300acU):0;
@@ -106,10 +109,24 @@ static void broadcast_task(void *unused){
         int count=miner_telemetry_json(message,sizeof(message),&snapshot,&event,++seq,event_seq,
             now*portTICK_PERIOD_MS,centi,active_mac,network_up,ethernet_phy_known());
         if(count<=0||(size_t)count>=sizeof(message))continue;
-        if(discovery)FreeRTOS_sendto(s,message,count,0,&peer,sizeof(peer));
-        for(int i=0;i<4;i++)if(clients[i].used){
-            if(now-clients[i].last>pdMS_TO_TICKS(5000)){clients[i].used=0;continue;}
-            FreeRTOS_sendto(s,message,count,0,&clients[i].peer,sizeof(clients[i].peer));
+        /* FreeRTOS UDP cannot send more than MTU - IPv4/UDP headers. Keep
+         * full share submissions by splitting oversized packets into a
+         * complete status and a partial event, never truncating a solution. */
+        int split=count>1472;
+        for(int part=0;part<=split;part++){
+            if(split){
+                static const miner_event status_event={.name="status"};
+                if(!part)count=miner_telemetry_json(message,sizeof(message),&snapshot,&status_event,++seq,event_seq,
+                    now*portTICK_PERIOD_MS,centi,active_mac,network_up,ethernet_phy_known());
+                else count=miner_event_json(message,sizeof(message),&event,++seq,event_seq,
+                    now*portTICK_PERIOD_MS,centi,active_mac);
+            }
+            if(count<=0||count>1472)continue;
+            if(discovery)FreeRTOS_sendto(s,message,count,0,&peer,sizeof(peer));
+            for(int i=0;i<4;i++)if(clients[i].used){
+                if(now-clients[i].last>pdMS_TO_TICKS(5000)){clients[i].used=0;continue;}
+                FreeRTOS_sendto(s,message,count,0,&clients[i].peer,sizeof(clients[i].peer));
+            }
         }
     }
 }
@@ -169,6 +186,7 @@ void dashboard_start(void){
     stats.hw_version=Xil_In32(MINER_HW_VERSION_REG);
     stats.bootloader_version=Xil_In32(MINER_BOOT_VERSION_REG);
     events=xQueueCreate(32,sizeof(miner_event));configASSERT(events);
-    configASSERT(xTaskCreate(broadcast_task,"telemetry",2048,0,2,0)==pdPASS);
+    configASSERT(xTaskCreate(broadcast_task,"telemetry",3072,0,2,0)==pdPASS);
     configASSERT(xTaskCreate(config_task,"config",3072,0,2,0)==pdPASS);
+    power_start();
 }

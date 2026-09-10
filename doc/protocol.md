@@ -58,6 +58,12 @@ Periodic `status` packets are emitted once per second while subscribed.
 the strapped board interface to attempt DHCP, without claiming physical link
 status is known.
 
+Application 1.1.0 adds the `power` object documented in
+[power telemetry](power_telemetry.md), with independent internal 5 V and VCCINT
+readings. Invalid or stale readings are null. Oversized share/status packets
+are sent as a full status plus a `partial: true` event; merge partial events
+with the preceding status. Each UDP payload is at most 1472 bytes.
+
 ## Configuration (TCP 4029)
 
 One newline-terminated JSON request per connection, maximum 1024 bytes and

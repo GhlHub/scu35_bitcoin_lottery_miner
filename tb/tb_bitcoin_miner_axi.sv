@@ -347,10 +347,10 @@ module tb_bitcoin_miner_axi #(parameter bit HYBRID = 0, parameter int unsigned N
 
         write_words256(ADDR_MIDSTATE_BASE, midstate);
         axi_read(12'h0b0, word);
-        if(word != 32'h01000000) $fatal(1,"Hardware version incorrect");
+        if(word != 32'h01020000) $fatal(1,"Hardware version incorrect");
         axi_write(12'h0b0, 32'hffffffff);
         axi_read(12'h0b0, word);
-        if(word != 32'h01000000) $fatal(1,"Hardware version must be read-only");
+        if(word != 32'h01020000) $fatal(1,"Hardware version must be read-only");
         axi_read(12'h0b4, word);
         if(word != 0) $fatal(1,"Boot version must reset to unknown");
         axi_write(12'h0b4, 32'h01000000);

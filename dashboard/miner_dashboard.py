@@ -111,6 +111,59 @@ def format_hashrate(item):
     return "unavailable" if value is None else f"{value / 1_000_000:.3f} MH/s"
 
 
+def validate_power(item):
+    power = item.get("power")
+    if power is None:
+        return  # Older firmware.
+    if not isinstance(power, dict) or power.get("source") != "INA700":
+        raise ValueError("Invalid power telemetry")
+    for name in ("internal_5v", "vccint"):
+        rail = power.get(name)
+        if not isinstance(rail, dict) or type(rail.get("valid")) is not bool:
+            raise ValueError("Invalid power rail")
+        if type(rail.get("errors")) is not int or not 0 <= rail["errors"] <= 0xffffffff:
+            raise ValueError("Invalid power error count")
+        for key, low, high in (("voltage_uv", 0, 204796875), ("current_ua", -15728640, 15728160),
+                               ("power_uw", 0, 1610612640), ("temp_milli_c", -256000, 255875),
+                               ("age_ms", 0, 3000)):
+            value = rail.get(key)
+            if rail["valid"]:
+                if type(value) is not int or not low <= value <= high:
+                    raise ValueError("Invalid power measurement")
+            elif value is not None:
+                raise ValueError("Unavailable rail must not contain measurements")
+
+
+def format_power(item):
+    power = item.get("power") or {}
+    elapsed_ms = max(0, int((time.monotonic() - item["power_seen"]) * 1000)) if "power_seen" in item else 0
+    def fresh(rail):
+        return rail.get("valid") and rail.get("age_ms", 3001) + elapsed_ms <= 3000
+    result = []
+    for name, label in (("internal_5v", "Internal 5 V"), ("vccint", "VCCINT core")):
+        rail = power.get(name) or {}
+        if not fresh(rail):
+            result.append(f"{label}: unavailable")
+        else:
+            result.append(f"{label}: {rail['power_uw']/1e6:.3f} W / "
+                          f"{rail['voltage_uv']/1e6:.3f} V / {rail['current_ua']/1e6:.3f} A "
+                          f"(sensor {rail['temp_milli_c']/1000:.1f} °C, age {rail['age_ms'] + elapsed_ms} ms)")
+        if rail.get("errors"):
+            result[-1] += f"; read errors {rail['errors']}"
+    rail = power.get("internal_5v") or {}
+    if fresh(rail) and rail.get("power_uw", 0) > 0 and item.get("hashrate_hps") is not None:
+        result.append(f"5 V efficiency: {item['hashrate_hps']/rail['power_uw']:.3f} MH/s/W")
+    return " | ".join(result)
+
+
+def merge_telemetry(previous, incoming):
+    if "power" in incoming:
+        incoming = dict(incoming, power_seen=incoming.get("seen", time.monotonic()))
+    if incoming.get("partial") is True and incoming["uptime_ms"] >= previous.get("uptime_ms", 0):
+        return dict(previous, **incoming)
+    return incoming
+
+
 def format_event(item):
     detail = item.get("details") or {}
     number = detail.get("job_number") or item.get("job_number", 0)
@@ -194,6 +247,7 @@ class Discovery(threading.Thread):
                                 submission.get("method") != "mining.submit" or
                                 not isinstance(submission.get("params"), list) or len(submission["params"]) != 5):
                             continue
+                    validate_power(item)
                     item = dict(item, ip=peer[0], seen=time.monotonic())
                     self.peers[peer[0]] = item["seen"]
                     self.messages.put(("telemetry", item))
@@ -201,7 +255,7 @@ class Discovery(threading.Thread):
                     continue
 
 
-DASHBOARD_VERSION = "1.0.0"
+DASHBOARD_VERSION = "1.1.0"
 
 
 def format_versions(item):
@@ -234,6 +288,9 @@ def gui(args):
     table.pack(fill="x")
     live = tk.StringVar(value="Select a miner to inspect live counters.")
     ttk.Label(pane, textvariable=live, wraplength=1250).pack(anchor="w", pady=5)
+    power_live = tk.StringVar(value="Power telemetry: select a miner")
+    ttk.Label(pane, textvariable=power_live, wraplength=1250).pack(anchor="w", pady=5)
+    ttk.Label(pane, text="Internal 5 V is not wall-plug power; VCCINT is core-only. Do not add these readings.").pack(anchor="w")
     form = ttk.LabelFrame(pane, text="Save complete configuration to selected miner", padding=10)
     form.pack(fill="x", pady=10)
     fields = {}
@@ -327,7 +384,8 @@ def gui(args):
             except queue.Empty:
                 break
             if kind == "telemetry":
-                ip = value["ip"];miners[ip] = value
+                ip = value["ip"]
+                miners[ip] = merge_telemetry(miners.get(ip, {}), value)
                 if not table.exists(ip):
                     table.insert("", "end", iid=ip);append(f"Discovered {ip} ({value['mac']})")
                 identity = (value["uptime_ms"] // 1000, value["event_seq"])
@@ -384,6 +442,7 @@ def gui(args):
         if form_state.ip in miners:
             item = miners[form_state.ip]
             freshness = "STALE — " if now-item["seen"] > 5 else ""
+            power_live.set(freshness + format_power(item))
             live.set(f"{freshness}{form_state.ip}: pool {'authorized' if item.get('pool_authorized') else 'not authorized'} | "
                      f"mining {'active' if item.get('mining') else 'idle'} | completed hashes {item.get('hashes_total', 'unavailable')} | "
                      f"sample {item.get('hashrate_sample_ms', 0)} ms | hardware errors {item.get('hardware_errors', 0)} | "

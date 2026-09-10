@@ -14,7 +14,7 @@ int main(void){
     assert(!miner_config_parse(line,strlen(line),&saved,&next)&&!next.password[0]);
     snprintf(line,sizeof(line),"%.*s,\"password\":false}",(int)strlen(keep)-1,keep);
     assert(miner_config_parse(line,strlen(line),&saved,&next));
-    char out[2048];int n=miner_config_json(out,sizeof(out),&saved,1,next.mac);
+    char out[MINER_TELEMETRY_MAX];int n=miner_config_json(out,sizeof(out),&saved,1,next.mac);
     assert(n>0&&(size_t)n<sizeof(out)&&JSON_Validate(out,n)==JSONSuccess);
     assert(!strstr(out,"do-not-disclose")&&!strstr(out,"\"password\":"));
     assert(strstr(out,"\"stored\":true")&&strstr(out,"wallet.worker"));
@@ -36,7 +36,7 @@ int main(void){
     assert(!json_u32(out,n,"engines",&number)&&number==3);
     assert(!json_string(out,n,"hw_version",field,sizeof(field))&&!strcmp(field,"1.0.0"));
     assert(!json_string(out,n,"bootloader_version",field,sizeof(field))&&!strcmp(field,"2.3.4"));
-    assert(!json_string(out,n,"application_version",field,sizeof(field))&&!strcmp(field,"1.0.0"));
+    assert(!json_string(out,n,"application_version",field,sizeof(field))&&!strcmp(field,"1.1.0"));
     assert(!json_u32(out,n,"job_number",&number)&&number==20);
     assert(strstr(out,"5000000000")&&!strstr(out,"do-not-disclose"));
     assert(miner_telemetry_json(out,10,&s,&e,1,1,1000,3700,saved.mac,1,1)>=10);
@@ -44,13 +44,31 @@ int main(void){
     n=miner_telemetry_json(out,sizeof(out),&s,&e,1,1,0,0,saved.mac,0,0);
     assert(JSON_Validate(out,n)==JSONSuccess&&strstr(out,"\"hashrate_hps\":null")&&strstr(out,"\"submission\":null"));
     assert(strstr(out,"\"hw_version\":null")&&strstr(out,"\"bootloader_version\":null"));
-    /* Maximum-size event must still fit the UDP/dashboard 2048-byte limit. */
+    assert(strstr(out,"\"power_uw\":null"));
+    s.power[0]=(ina700_sample){.valid=1,.voltage_uv=5000000,.current_ua=1200000,
+        .power_uw=6000000,.temp_milli_c=30000,.sampled_ms=0xfffffff0U,.errors=2};
+    n=miner_telemetry_json(out,sizeof(out),&s,&e,1,1,16,0,saved.mac,1,1);
+    assert(JSON_Validate(out,n)==JSONSuccess);
+    assert(!json_u32(out,n,"power.internal_5v.power_uw",&number)&&number==6000000);
+    assert(!json_u32(out,n,"power.internal_5v.age_ms",&number)&&number==32);
+    n=miner_telemetry_json(out,sizeof(out),&s,&e,1,1,4000,0,saved.mac,1,1);
+    assert(strstr(out,"\"power_uw\":null")&&!strstr(out,"6000000"));
+    /* Maximum-size event must still fit the UDP/dashboard limit. */
     memset(e.submission,' ',sizeof(e.submission)-1);
     e.submission[0]='{';e.submission[1]='}';e.submission[sizeof(e.submission)-1]=0;
     s.jobs=s.submitted=s.accepted=s.rejected=s.invalid=s.dropped=UINT32_MAX;
     s.hashrate_valid=1;s.hashrate_hps=s.sample_ms=UINT32_MAX;s.hashes_total=UINT64_MAX;
     s.engines=3;s.hw_version=s.bootloader_version=UINT32_MAX;e.job_number=UINT32_MAX;
+    for(unsigned k=0;k<2;k++)s.power[k]=(ina700_sample){.valid=1,.voltage_uv=UINT32_MAX,
+        .current_ua=INT32_MIN,.power_uw=UINT32_MAX,.temp_milli_c=INT32_MIN,
+        .sampled_ms=UINT32_MAX-3000,.errors=UINT32_MAX};
     n=miner_telemetry_json(out,sizeof(out),&s,&e,UINT32_MAX,UINT32_MAX,UINT32_MAX,99999,saved.mac,1,1);
     assert(n>0&&(size_t)n<sizeof(out)&&JSON_Validate(out,n)==JSONSuccess);
-    puts("PASS: EEPROM readback redaction, password preservation, measured rate/wrap, detailed share JSON");
+    n=miner_event_json(out,sizeof(out),&e,UINT32_MAX,UINT32_MAX,UINT32_MAX,99999,saved.mac);
+    assert(n>0&&n<=1472&&JSON_Validate(out,n)==JSONSuccess);
+    assert(strstr(out,"\"partial\":true"));
+    miner_event status={.name="status"};
+    n=miner_telemetry_json(out,sizeof(out),&s,&status,UINT32_MAX,UINT32_MAX,UINT32_MAX,99999,saved.mac,1,1);
+    assert(n>0&&n<=1472&&JSON_Validate(out,n)==JSONSuccess);
+    puts("PASS: EEPROM redaction, hashrate, power validity/staleness, share JSON and MTU-bounded split packets");
 }
