@@ -173,9 +173,10 @@ a power-cycle. A CPU restart is not presented as an FPGA reboot.
 ## Reproduce and review
 
 Dependencies are pinned by [fetch_dependencies.sh](scripts/fetch_dependencies.sh).
-The pinned HyperBus revision plus the included WREADY patch preserves the
-tested source configuration. That fix is also upstream in
+The pinned HyperBus revision includes the tested WREADY fix directly from
 [`GhlHub/hyperbus_controller` commit `26bcdc5`](https://github.com/GhlHub/hyperbus_controller/commit/26bcdc5).
+No local HyperBus patch is applied. See [dependency refresh](doc/hyperbus_dependency_update.md)
+for the rebuild comparison and migration instructions.
 The local UART package is refreshed with Vivado's IP packager because the
 downloaded package is not directly accepted for the target part.
 

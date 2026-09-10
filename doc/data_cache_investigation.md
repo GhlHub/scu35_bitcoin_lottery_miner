@@ -5,10 +5,11 @@ authorized a local patch, full rebuild, flash programming, and reboot.
 
 ## Authorized local fix
 
-The local RTL and packaged IP now explicitly deassert registered `WREADY`
-on the final W handshake. The reference repository under `/raid/work/ghl_ip`
-is unchanged. `patches/hyperbus-wready.patch` records the change;
-`scripts/fetch_dependencies.sh` applies it to the pinned dependency.
+The local RTL and packaged IP were patched to explicitly deassert registered
+`WREADY` on the final W handshake. The fix was subsequently pushed upstream
+as `26bcdc5`. On 2026-09-10 this project pinned that upstream commit and
+removed the redundant `patches/hyperbus-wready.patch` and its application step.
+The patch remains in Git history. See [dependency refresh](hyperbus_dependency_update.md).
 
 The former probe is now a regression: it fails on the original RTL and
 passes on the patched RTL, verifying 79 accepted/stored/commanded words and

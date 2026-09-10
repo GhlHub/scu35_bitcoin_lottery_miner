@@ -1,4 +1,4 @@
-# Refresh the locally patched IP; source/bitstream checks precede programming.
+# Refresh the pinned upstream IP; source/bitstream checks precede programming.
 set root [file normalize [file join [file dirname [info script]] ..]]
 open_project $root/build/vivado/scu35_miner.xpr
 update_ip_catalog -rebuild

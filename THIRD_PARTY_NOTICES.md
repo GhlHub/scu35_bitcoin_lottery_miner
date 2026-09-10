@@ -6,7 +6,7 @@ Retain each dependency's own license and notices when distributing it.
 | Source | Revision | License location |
 | --- | --- | --- |
 | Local VEK280 Bitcoin miner | b0354ad2f636737b011931a4f47ed0d38226dae0 | Root LICENSE (Apache-2.0) |
-| GhlHub/hyperbus_controller | a3e38a65512daa10a436d7dc5ecaaa477c9811ec | third_party/hyperbus_controller/LICENSE and individual source headers |
+| GhlHub/hyperbus_controller | 26bcdc5c0f2044867d4bce6872a646fcee25079c | third_party/hyperbus_controller/LICENSE and individual source headers |
 | GhlHub/e_uart | 72f014c35d812936c70f2e17acdd32a491c1fcdd | third_party/e_uart/LICENSE |
 | FreeRTOS/FreeRTOS-LTS, 202604-LTS | 0b25dc50bae4cb971c7a459b109e52ab2f01a6b8 | third_party/FreeRTOS-LTS and component LICENSE files |
 | FreeRTOS-Kernel | 3a22924e0a9ddbbc8b0758881c33b3422a5cc20d | Component LICENSE.md |
@@ -26,11 +26,10 @@ AMD IP and generated output retain AMD notices and applicable tool/IP terms.
 The installed AMD SCU35 board files v2.0 provide the production board pinout.
 HyperRAM pins are taken from the GhlHub SCU35 reference constraints.
 
-The local HyperBus checkout includes `patches/hyperbus-wready.patch`, fixing
-the AXI write-ready tail cycle in both RTL and packaged source. IP metadata
-checksums were regenerated. Original copyright/SPDX headers are retained;
-the fix was subsequently committed and pushed upstream as `26bcdc5`.
-This build retains the tested pinned revision plus patch. Other downloaded
+The HyperBus dependency is pinned to upstream commit `26bcdc5`, which includes
+the AXI write-ready tail-cycle fix in both RTL and packaged source, refreshed
+IP checksums, and its regression test. The former local patch is no longer
+needed. Original copyright/SPDX headers are retained. Other downloaded
 repositories remain unmodified. The derived UART package under
 build/ip_repo changes the vendor to `github.com` to match the reference BD,
 sets Spartan UltraScale+ support, and refreshes checksums using `ipx` commands.
